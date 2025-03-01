@@ -2,9 +2,9 @@ name: 内容监控任务
 
 on:
   schedule:
-    # 每天运行两次，可以根据需要调整
-    - cron: '0 */12 * * *'
-  workflow_dispatch:  # 允许手动触发
+    # 每4小时运行一次
+    - cron: '0 */4 * * *'
+  workflow_dispatch:  # 允许手动触发，部署后可立即运行
 
 jobs:
   monitor:
