@@ -240,7 +240,7 @@ class ContentWatcher:
         """调用API获取关键词的相关信息
         
         Args:
-            keywords: 从URL提取的关键词
+            keywords: 从URL提取的关键词，可以是单个关键词或逗号分隔的多个关键词
             
         Returns:
             包含API返回信息的字典，如果调用失败则返回空字典
@@ -414,6 +414,77 @@ class ContentWatcher:
         logger.info(f"网站 {site_id} 有 {len(updated_urls)} 个URL今天更新")
         return updated_urls
     
+    def _batch_query_keywords(self, url_keywords_map: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+        """批量查询多个URL的关键词信息
+        
+        Args:
+            url_keywords_map: URL到关键词的映射
+            
+        Returns:
+            URL到API响应结果的映射
+        """
+        if not url_keywords_map or not self.api_url:
+            return {}
+            
+        # 准备结果字典
+        results = {}
+        
+        # 如果只有一个URL，直接查询
+        if len(url_keywords_map) == 1:
+            url = next(iter(url_keywords_map))
+            keywords = url_keywords_map[url]
+            if keywords:
+                results[url] = self._get_keyword_info(keywords)
+            return results
+            
+        # 将所有关键词合并为一个列表
+        all_keywords = []
+        url_to_keyword = {}
+        
+        for url, keywords in url_keywords_map.items():
+            if keywords:
+                all_keywords.append(keywords)
+                url_to_keyword[url] = keywords
+        
+        # 如果没有有效的关键词，返回空结果
+        if not all_keywords:
+            return {}
+            
+        # 批次处理，每批最多10个关键词
+        batch_size = 10
+        for i in range(0, len(all_keywords), batch_size):
+            batch_keywords = all_keywords[i:i+batch_size]
+            
+            # 合并关键词为逗号分隔的字符串
+            combined_keywords = "，".join(batch_keywords)
+            
+            # 获取批量关键词数据
+            batch_data = self._get_keyword_info(combined_keywords)
+            
+            # 如果请求成功，将结果分配给各个URL
+            if batch_data and 'data' in batch_data and batch_data.get('status') == 'success':
+                # 为每个关键词找到对应的URL
+                for keyword_data in batch_data.get('data', []):
+                    keyword = keyword_data.get('keyword', '')
+                    
+                    # 查找这个关键词对应的URL
+                    for url, kw in url_to_keyword.items():
+                        if keyword.lower() in kw.lower():
+                            # 为该URL创建结果集合
+                            if url not in results:
+                                results[url] = {
+                                    'status': 'success',
+                                    'geo_target': batch_data.get('geo_target', '全球'),
+                                    'total_results': 0,
+                                    'data': []
+                                }
+                            
+                            # 添加关键词数据
+                            results[url]['data'].append(keyword_data)
+                            results[url]['total_results'] = len(results[url]['data'])
+        
+        return results
+
     def send_telegram_notification(self, updates_by_site: Dict[str, List[str]]) -> bool:
         """发送Telegram通知"""
         if not any(updates_by_site.values()):
@@ -429,20 +500,31 @@ class ContentWatcher:
             site_name = self._format_site_name(site_id, site_index)
             message_parts.append(f"{site_name} 今日更新:")
             
-            # 显示所有更新的URL，不再限制数量
+            # 收集所有URL和它们的关键词
+            url_keywords_map = {}
             for url in urls:
                 # 提取URL中的关键词
                 keywords = self._extract_keywords_from_url(url)
+                if keywords:
+                    url_keywords_map[url] = keywords
+            
+            # 批量查询关键词信息
+            keyword_results = self._batch_query_keywords(url_keywords_map)
+            
+            # 显示所有更新的URL
+            for url in urls:
                 message_parts.append(f"- {url}")
                 
+                # 提取URL中的关键词
+                keywords = self._extract_keywords_from_url(url)
                 if keywords:
                     message_parts.append(f"  关键词: {keywords}")
                     
-                    # 获取关键词信息并添加到消息中
-                    keyword_info = self._get_keyword_info(keywords)
-                    formatted_info = self._format_keyword_info(keyword_info)
-                    if formatted_info:
-                        message_parts.append(f"  详情:\n    {formatted_info}")
+                    # 添加关键词信息到消息中
+                    if url in keyword_results:
+                        formatted_info = self._format_keyword_info(keyword_results[url])
+                        if formatted_info:
+                            message_parts.append(f"  详情:\n    {formatted_info}")
             
             message_parts.append("")  # 添加空行分隔
         
