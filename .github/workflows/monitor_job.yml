@@ -6,6 +6,10 @@ on:
     - cron: '0 */4 * * *'
   workflow_dispatch:  # 允许手动触发，部署后可立即运行
 
+# 添加权限设置
+permissions:
+  contents: write  # 给予写入仓库内容的权限
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
