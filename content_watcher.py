@@ -10,6 +10,7 @@ import json
 import base64
 import logging
 import datetime
+import re  # 添加正则表达式模块
 from typing import Dict, List, Tuple, Optional, Any
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -46,6 +47,9 @@ class ContentWatcher:
         
         self.telegram_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
         self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+        
+        # 获取API URL
+        self.api_url = os.environ.get('KEYWORDS_API_URL', '')
         
         # 解析网站URL列表
         urls_json = os.environ.get('SITEMAP_URLS', '[]')
@@ -86,17 +90,20 @@ class ContentWatcher:
             logger.error("加密密钥无效或不是32字节")
             raise ValueError(f"ENCRYPTION_KEY必须是32字节，当前是{len(self.encryption_key)}字节")
             
-        if not self.telegram_token and not self.test_mode:
+        if not self.telegram_token:
             logger.error("未设置Telegram Bot Token")
             raise ValueError("未设置TELEGRAM_BOT_TOKEN")
             
-        if not self.telegram_chat_id and not self.test_mode:
+        if not self.telegram_chat_id:
             logger.error("未设置Telegram Chat ID")
             raise ValueError("未设置TELEGRAM_CHAT_ID")
             
-        if not self.website_urls and not self.test_mode:
+        if not self.website_urls:
             logger.error("未提供网站URL列表")
             raise ValueError("SITEMAP_URLS必须是有效的JSON数组")
+            
+        if not self.api_url:
+            logger.warning("未设置关键词API URL，将不会查询关键词信息")
     
     def _load_previous_data(self) -> Dict[str, List[Dict[str, str]]]:
         """加载先前保存的数据"""
@@ -176,24 +183,6 @@ class ContentWatcher:
         """下载并解析网站地图，返回URL和最后修改日期的映射"""
         sitemap_data = {}
         
-        # 测试模式下使用模拟数据
-        if self.test_mode:
-            logger.info(f"测试模式：生成模拟站点地图数据 {self._get_site_identifier(url)}")
-            # 创建一些测试数据
-            base_url = url.split('/sitemap.xml')[0]
-            today = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-            
-            # 模拟一些URL，其中一些是今天更新的
-            test_paths = ['/page1', '/page2', '/page3', '/blog/post1', '/blog/post2']
-            for i, path in enumerate(test_paths):
-                full_url = f"{base_url}{path}"
-                # 让部分URL显示为今天更新
-                lastmod = today if i % 2 == 0 else '2025-01-01'
-                sitemap_data[full_url] = lastmod
-                
-            logger.info(f"已生成模拟数据，{len(sitemap_data)} 个URL")
-            return sitemap_data
-            
         try:
             logger.info(f"正在下载网站地图: {self._get_site_identifier(url)}")
             response = requests.get(url, timeout=30)
@@ -229,6 +218,153 @@ class ContentWatcher:
         except Exception as e:
             logger.error(f"处理网站地图时出现未知错误: {e}")
             return {}
+    
+    def _extract_keywords_from_url(self, url: str) -> str:
+        """从URL中提取关键词
+        
+        例如：从 https://sprunkly.org/game/sprunki-retake-final-update 提取 'sprunki retake final update'
+        """
+        parsed_url = urlparse(url)
+        path_parts = parsed_url.path.strip('/').split('/')
+        
+        # 如果路径至少有一部分，取最后一部分作为关键词
+        if path_parts and path_parts[-1]:
+            keywords = path_parts[-1]
+            # 将连字符替换为空格，使关键词更可读
+            keywords = keywords.replace('-', ' ')
+            return keywords
+        
+        return ""
+    
+    def _get_keyword_info(self, keywords: str) -> Dict[str, Any]:
+        """调用API获取关键词的相关信息
+        
+        Args:
+            keywords: 从URL提取的关键词
+            
+        Returns:
+            包含API返回信息的字典，如果调用失败则返回空字典
+        """
+        if not keywords or not self.api_url:
+            return {}
+            
+        try:
+            # 对关键词进行URL编码，确保空格和特殊字符被正确处理
+            encoded_keywords = requests.utils.quote(keywords)
+            
+            # 构建完整URL，将编码后的关键词附加到查询参数中
+            full_url = f"{self.api_url}{encoded_keywords}"
+            logger.info(f"调用API获取关键词信息: {full_url}")
+            
+            # 发送GET请求
+            response = requests.get(
+                full_url,
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            response.raise_for_status()
+            
+            # 解析JSON响应
+            data = response.json()
+            logger.info(f"成功获取关键词 '{keywords}' 的信息")
+            return data
+            
+        except requests.RequestException as e:
+            logger.error(f"调用关键词API时出错: {e}")
+            return {}
+        except ValueError as e:
+            logger.error(f"解析API响应JSON时出错: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"处理关键词信息时出现未知错误: {e}")
+            return {}
+    
+    def _format_keyword_info(self, info: Dict[str, Any]) -> str:
+        """将API返回的信息格式化为用户可读的文本
+        
+        Args:
+            info: API返回的信息字典
+            
+        Returns:
+            格式化后的文本，包含关键词搜索量、竞争度和月度趋势数据
+        """
+        if not info or not isinstance(info, dict):
+            return ""
+        
+        # 检查API状态    
+        status = info.get("status", "")
+        if status != "success" or "data" not in info:
+            return "⚠️ 未找到关键词数据"
+            
+        data = info.get("data", [])
+        if not data:
+            return "📊 没有相关的关键词数据"
+            
+        # 构建格式化文本
+        parts = []
+        parts.append(f"📊 <b>关键词搜索数据</b> ({info.get('geo_target', '全球')})")
+        parts.append(f"🔍 总结果数: {info.get('total_results', 0)}")
+        
+        # 对关键词数据进行排序，月均搜索量高的排在前面
+        sorted_data = sorted(
+            data, 
+            key=lambda x: x.get('metrics', {}).get('avg_monthly_searches', 0),
+            reverse=True
+        )
+        
+        # 显示所有关键词的详细数据
+        for i, keyword_data in enumerate(sorted_data):
+            keyword = keyword_data.get("keyword", "未知关键词")
+            metrics = keyword_data.get("metrics", {})
+            
+            avg_searches = metrics.get("avg_monthly_searches", 0)
+            competition = metrics.get("competition", "N/A")
+            competition_index = metrics.get("competition_index", "N/A")
+            
+            # 竞争度文字表示
+            competition_text = "未知"
+            if competition == "LOW":
+                competition_text = "低"
+            elif competition == "MEDIUM":
+                competition_text = "中"
+            elif competition == "HIGH":
+                competition_text = "高"
+            elif competition == "N/A":
+                competition_text = "无数据"
+                
+            # 添加关键词信息
+            parts.append(f"\n🔑 <b>{keyword}</b>")
+            parts.append(f"  • 月均搜索量: <b>{avg_searches}</b> | 竞争度: <b>{competition_text}</b> ({competition_index})")
+            
+            # 获取月度搜索数据并显示趋势
+            monthly_searches = metrics.get("monthly_searches", [])
+            if monthly_searches:
+                # 按时间顺序排序月度数据
+                monthly_searches = sorted(
+                    monthly_searches,
+                    key=lambda x: (x.get("year", ""), x.get("month", ""))
+                )
+                
+                # 显示月度趋势
+                trend_parts = []
+                trend_parts.append("  • 月度趋势:")
+                
+                for month_info in monthly_searches:
+                    year = month_info.get("year", "")
+                    month = month_info.get("month", "")
+                    searches = month_info.get("searches", 0)
+                    
+                    # 将月份名称转换为短格式
+                    month_short = month[:3] if month else ""
+                    
+                    # 根据搜索量显示不同的图标
+                    icon = "📈" if searches > avg_searches else "📉" if searches < avg_searches else "➡️"
+                    
+                    trend_parts.append(f"    {icon} {year}/{month_short}: <b>{searches}</b>")
+                
+                parts.extend(trend_parts)
+        
+        return "\n".join(parts)
     
     def process_site(self, site_url: str, site_index: int) -> List[str]:
         """处理单个网站，返回今日更新的URL列表"""
@@ -293,23 +429,25 @@ class ContentWatcher:
             site_name = self._format_site_name(site_id, site_index)
             message_parts.append(f"{site_name} 今日更新:")
             
-            # 限制每个网站最多显示10个URL
-            for url in urls[:10]:
+            # 显示所有更新的URL，不再限制数量
+            for url in urls:
+                # 提取URL中的关键词
+                keywords = self._extract_keywords_from_url(url)
                 message_parts.append(f"- {url}")
                 
-            if len(urls) > 10:
-                message_parts.append(f"... 还有 {len(urls) - 10} 个更新未显示")
+                if keywords:
+                    message_parts.append(f"  关键词: {keywords}")
+                    
+                    # 获取关键词信息并添加到消息中
+                    keyword_info = self._get_keyword_info(keywords)
+                    formatted_info = self._format_keyword_info(keyword_info)
+                    if formatted_info:
+                        message_parts.append(f"  详情:\n    {formatted_info}")
             
             message_parts.append("")  # 添加空行分隔
         
         message = "\n".join(message_parts).strip()
         
-        # 测试模式下只打印消息
-        if self.test_mode:
-            logger.info("测试模式：模拟发送Telegram通知")
-            logger.info(f"消息内容:\n{message}")
-            return True
-            
         # 发送消息
         try:
             api_url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
@@ -353,11 +491,10 @@ class ContentWatcher:
 if __name__ == "__main__":
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='多站点内容监控工具')
-    parser.add_argument('--test', action='store_true', help='在测试模式下运行，使用模拟数据')
     args = parser.parse_args()
     
     try:
-        watcher = ContentWatcher(test_mode=args.test)
+        watcher = ContentWatcher()
         watcher.run()
     except Exception as e:
         logger.critical(f"执行过程中出现错误: {e}")
