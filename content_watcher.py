@@ -669,14 +669,28 @@ class ContentWatcher:
             
             message_parts.append("")  # 添加空行分隔
         
-        message = "\n".join(message_parts).strip()
+        # 生成完整消息
+        full_message = "\n".join(message_parts).strip()
         
-        # 检查消息长度，避免超过Telegram消息长度限制
-        if len(message) > 4000:
-            logger.warning(f"消息长度 ({len(message)}) 超过Telegram限制，将进一步截断")
-            message = message[:3900] + "...\n\n(消息已截断，更多信息请查看日志)"
+        # Telegram消息长度限制
+        max_message_length = 4000
         
-        # 发送消息
+        # 检查消息长度，如果超过限制则分割发送
+        if len(full_message) > max_message_length:
+            return self._send_long_message(full_message, max_message_length)
+        else:
+            # 消息长度在限制内，直接发送
+            return self._send_telegram_message(full_message)
+    
+    def _send_telegram_message(self, message: str) -> bool:
+        """发送单条Telegram消息
+        
+        Args:
+            message: 要发送的消息内容
+            
+        Returns:
+            发送是否成功
+        """
         try:
             api_url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
             payload = {
@@ -689,12 +703,84 @@ class ContentWatcher:
             response = requests.post(api_url, json=payload, timeout=10)
             response.raise_for_status()
             
-            logger.info("已成功发送Telegram通知")
             return True
             
         except requests.RequestException as e:
-            logger.error(f"发送Telegram通知时出错: {e}")
+            logger.error(f"发送Telegram消息时出错: {e}")
             return False
+    
+    def _send_long_message(self, message: str, max_length: int) -> bool:
+        """将长消息分割为多条发送
+        
+        Args:
+            message: 完整消息内容
+            max_length: 单条消息最大长度
+            
+        Returns:
+            是否全部发送成功
+        """
+        logger.info(f"消息长度 ({len(message)}) 超过Telegram限制，将分多条发送")
+        
+        # 分割消息的标记
+        parts_count = (len(message) + max_length - 1) // max_length  # 向上取整
+        
+        # 前言部分（包含在第一条消息中）
+        header_lines = []
+        message_lines = message.split('\n')
+        
+        # 提取前3行作为所有消息的头部（通常包含通知标题、日期和总更新数）
+        if len(message_lines) > 3:
+            header_lines = message_lines[:3]
+            message_lines = message_lines[3:]
+        
+        # 分割剩余行
+        chunks = []
+        current_chunk = header_lines.copy()
+        current_length = len('\n'.join(current_chunk))
+        
+        for line in message_lines:
+            # 估算加上当前行后的长度
+            line_length = len(line) + 1  # +1 是换行符
+            
+            # 如果加上当前行会超出限制，则开始新的块
+            if current_length + line_length > max_length and current_chunk:
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = header_lines.copy()  # 每个块都以头部开始
+                current_chunk.append(f"\n(第 {len(chunks)+1}/{parts_count} 部分)")
+                current_length = len('\n'.join(current_chunk))
+            
+            current_chunk.append(line)
+            current_length += line_length
+        
+        # 添加最后一个块
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+        
+        # 发送所有分割后的消息
+        all_success = True
+        for i, chunk in enumerate(chunks, 1):
+            logger.info(f"发送第 {i}/{len(chunks)} 部分消息，长度: {len(chunk)}")
+            
+            # 添加分页信息
+            if i == 1:
+                chunk = f"{chunk}\n\n(消息太长，分 {len(chunks)} 部分发送，这是第 {i} 部分)"
+            else:
+                chunk = f"{chunk}\n\n(第 {i}/{len(chunks)} 部分)"
+            
+            if not self._send_telegram_message(chunk):
+                all_success = False
+                logger.error(f"第 {i}/{len(chunks)} 部分消息发送失败")
+            
+            # 消息之间添加短暂延迟，避免API限制
+            if i < len(chunks):
+                time.sleep(1)
+        
+        if all_success:
+            logger.info(f"已成功发送所有 {len(chunks)} 部分Telegram通知")
+        else:
+            logger.warning("部分Telegram通知发送失败")
+            
+        return all_success
     
     def _format_detailed_updates(self, message_parts: List[str], urls: List[str], 
                                 url_keywords_map: Dict[str, str], 

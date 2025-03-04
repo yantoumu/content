@@ -25,4 +25,7 @@ ENV/
 Thumbs.db 
 
 # 开发文档
-DEVELOPMENT.md 
+DEVELOPMENT.md
+
+# 排除特定文件
+tg.py 
