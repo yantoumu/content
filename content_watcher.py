@@ -186,18 +186,48 @@ class ContentWatcher:
         return f"网站 {index+1} ({site_id})"
     
     def _is_updated_today(self, lastmod: Optional[str]) -> bool:
-        """检查lastmod是否是今天的日期"""
+        """检查lastmod日期是否是今天"""
         if not lastmod:
             return False
             
         try:
-            # 解析ISO格式的日期
-            lastmod_date = datetime.datetime.fromisoformat(lastmod.replace('Z', '+00:00'))
-            today = datetime.datetime.now(datetime.timezone.utc).date()
-            return lastmod_date.date() == today
-        except Exception as e:
-            logger.error(f"解析日期时出错: {lastmod}, {e}")
+            date_str = lastmod.split('T')[0]  # 提取日期部分
+            lastmod_date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+            today = datetime.datetime.now().date()
+            return lastmod_date == today
+        except (ValueError, IndexError):
             return False
+
+    def _should_exclude_url(self, url: str) -> bool:
+        """检查URL是否应该被排除
+        
+        排除以下类型的URL:
+        1. 以.games结尾的域名
+        2. 包含/mahjong.games的路径
+        3. 包含其他不需要的游戏相关路径
+        
+        Args:
+            url: 要检查的URL
+            
+        Returns:
+            如果URL应该被排除返回True，否则返回False
+        """
+        # 解析URL以获取域名和路径
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc
+        path = parsed_url.path
+        
+        # 检查域名是否以.games结尾
+        if domain.endswith('.games'):
+            logger.debug(f"排除以.games结尾的域名: {url}")
+            return True
+            
+        # 检查路径中是否包含.games
+        if '.games' in path:
+            logger.debug(f"排除路径中包含.games的URL: {url}")
+            return True
+            
+        return False
     
     def download_and_parse_sitemap(self, url: str) -> Dict[str, Optional[str]]:
         """下载并解析网站地图，返回URL和最后修改日期的映射"""
@@ -223,6 +253,11 @@ class ContentWatcher:
                 
                 if loc_elem is not None and loc_elem.text:
                     url_text = loc_elem.text.strip()
+                    
+                    # 检查URL是否应该被排除
+                    if self._should_exclude_url(url_text):
+                        continue
+                        
                     lastmod_text = lastmod_elem.text.strip() if lastmod_elem is not None and lastmod_elem.text else None
                     sitemap_data[url_text] = lastmod_text
             
