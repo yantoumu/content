@@ -220,17 +220,17 @@ class ContentWatcher:
         
         # 检查域名是否以.games结尾
         if domain.endswith('.games'):
-            logger.debug(f"排除以.games结尾的域名: {url}")
+            logger.debug("排除以.games结尾的域名")
             return True
             
         # 检查路径中是否包含.games
         if '.games' in path:
-            logger.debug(f"排除路径中包含.games的URL: {url}")
+            logger.debug("排除路径中包含.games的URL")
             return True
             
         # 检查路径中是否包含/tag/
         if '/tag/' in path:
-            logger.debug(f"排除标签页面URL: {url}")
+            logger.debug("排除标签页面URL")
             return True
             
         return False
@@ -298,15 +298,14 @@ class ContentWatcher:
             if not path_parts:
                 return ""
             
-            # 处理特殊情况：检查URL结构类型
             # 1. 检查是否为纯数字路径（如 /sitemap/games/33）
             if path_parts[-1].isdigit():
-                logger.debug(f"URL路径以纯数字结尾，跳过关键词提取: {url}")
+                logger.debug("URL路径以纯数字结尾，跳过关键词提取")
                 return ""
                 
             # 检查路径的最后部分是否以.games结尾
             if path_parts[-1].endswith('.games'):
-                logger.debug(f"URL路径以.games结尾，跳过关键词提取: {url}")
+                logger.debug("URL路径以.games结尾，跳过关键词提取")
                 return ""
             
             # 2. 检查网站特定结构
@@ -331,12 +330,12 @@ class ContentWatcher:
             
             # 如果关键词看起来很不合理（例如太长或太短），记录日志但仍返回
             if len(keywords) < 3 or len(keywords) > 50:
-                logger.debug(f"提取的关键词可能不合理: {keywords}, 来自URL: {url}")
+                logger.debug(f"提取的关键词可能不合理: {keywords}")
             
             return keywords
             
         except Exception as e:
-            logger.error(f"提取关键词时出错: {e}, URL: {url}")
+            logger.error(f"提取关键词时出错: {e}")
             return ""
     
     def _get_keyword_info(self, keywords: str) -> Dict[str, Any]:
@@ -505,11 +504,13 @@ class ContentWatcher:
                 # 为了避免发送过多通知，限制首次运行时报告的更新数量
                 if not is_first_run or len(updated_urls) < self.max_first_run_updates:
                     updated_urls.append(url)
-                    # 记录检测到更新的原因，帮助调试
+                    # 不再记录具体URL，只记录检测到更新的数量和类型
                     if is_new:
-                        logger.info(f"检测到新URL: {url}")
+                        # 不输出具体URL
+                        pass
                     else:
-                        logger.info(f"检测到URL更新: {url}, 前一个lastmod: {previous_urls.get(url)}, 新lastmod: {lastmod}")
+                        # 不输出具体URL
+                        pass
             
             # 加密和保存所有URL
             encrypted_url = self._encrypt_url(url)
@@ -524,6 +525,14 @@ class ContentWatcher:
         # 如果是首次运行并且有大量更新，记录日志
         if is_first_run and len(sitemap_data) > self.max_first_run_updates:
             logger.info(f"首次运行，网站 {site_id} 共有 {len(sitemap_data)} 个URL，但只报告了前 {len(updated_urls)} 个")
+            
+        # 新增：记录新URL的数量统计
+        new_count = sum(1 for url in updated_urls if url not in previous_urls)
+        updated_count = len(updated_urls) - new_count
+        if new_count > 0:
+            logger.info(f"网站 {site_id} 有 {new_count} 个新URL")
+        if updated_count > 0:
+            logger.info(f"网站 {site_id} 有 {updated_count} 个更新的URL")
             
         logger.info(f"网站 {site_id} 有 {len(updated_urls)} 个URL今天更新")
         return updated_urls
