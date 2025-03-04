@@ -205,6 +205,7 @@ class ContentWatcher:
         1. 以.games结尾的域名
         2. 包含/mahjong.games的路径
         3. 包含其他不需要的游戏相关路径
+        4. 包含/tag/的路径（标签页面）
         
         Args:
             url: 要检查的URL
@@ -225,6 +226,11 @@ class ContentWatcher:
         # 检查路径中是否包含.games
         if '.games' in path:
             logger.debug(f"排除路径中包含.games的URL: {url}")
+            return True
+            
+        # 检查路径中是否包含/tag/
+        if '/tag/' in path:
+            logger.debug(f"排除标签页面URL: {url}")
             return True
             
         return False
