@@ -348,7 +348,7 @@ class ContentWatcher:
         Returns:
             包含API返回信息的字典，如果调用失败则返回空字典
         """
-        logger.info(f"当前的关键词: {keywords}")
+        # logger.info(f"当前的关键词: {keywords}")
         if not keywords or not self.api_url:
             return {}
             
@@ -356,7 +356,7 @@ class ContentWatcher:
 
             # 构建API请求URL
             api_request_url = f"{self.api_url}{keywords}"
-            logger.info(f"调用关键词API: {api_request_url}")
+            # logger.info(f"调用关键词API: {api_request_url}")
             
             response = requests.get(api_request_url, timeout=80)
             if response.status_code != 200:
