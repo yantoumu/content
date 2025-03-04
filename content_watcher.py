@@ -262,6 +262,11 @@ class ContentWatcher:
             if path_parts[-1].isdigit():
                 logger.debug(f"URL路径以纯数字结尾，跳过关键词提取: {url}")
                 return ""
+                
+            # 检查路径的最后部分是否以.games结尾
+            if path_parts[-1].endswith('.games'):
+                logger.debug(f"URL路径以.games结尾，跳过关键词提取: {url}")
+                return ""
             
             # 2. 检查网站特定结构
             # 例如: /game/territory-war 中，提取 territory-war 作为关键词
