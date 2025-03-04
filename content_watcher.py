@@ -18,6 +18,7 @@ import hashlib
 import binascii
 import argparse
 import time
+import random  # 确保导入random模块
 
 import requests
 from Crypto.Cipher import AES
@@ -538,104 +539,59 @@ class ContentWatcher:
         return updated_urls
     
     def _batch_query_keywords(self, url_keywords_map: Dict[str, str], is_first_run: bool = False) -> Dict[str, Dict[str, Any]]:
-        """批量查询多个URL的关键词信息
-        
-        Args:
-            url_keywords_map: URL到关键词的映射
-            is_first_run: 是否是首次运行，首次运行时不查询API
-            
-        Returns:
-            URL到API响应结果的映射
-        """
+        """批量查询多个URL的关键词信息"""
         results = {}
-        
-        # 首次运行时不查询API以避免发送大量请求
+
         if is_first_run:
             logger.info("首次运行，跳过关键词API查询")
             return results
-            
-        # 再次检查API URL是否设置
+
         if not self.api_url:
             logger.warning("关键词API URL未设置，跳过关键词查询")
             return results
-            
-        # 记录环境变量中的API URL值，用于调试
-        env_api_url = os.environ.get('KEYWORDS_API_URL', '未设置')
-        logger.info(f"环境变量中的KEYWORDS_API_URL值: 【{env_api_url}】")
-        logger.info(f"当前使用的API URL: 【{self.api_url}】")
-        
-        # 过滤掉没有关键词的URL，避免无效查询
+
         valid_url_keywords = {url: keywords for url, keywords in url_keywords_map.items() if keywords.strip()}
-        
+
         if not valid_url_keywords:
             logger.info("没有有效的关键词需要查询")
             return results
-        
-        # 准备批量查询
+
         logger.info(f"开始批量查询关键词，共有 {len(valid_url_keywords)} 个URL")
-        
-        # 每批处理的URL数量
+
+        # 每批处理的关键词数量
         batch_size = 5
-        
-        # 将URL分成多个批次处理
-        url_batches = [list(valid_url_keywords.keys())[i:i+batch_size] for i in range(0, len(valid_url_keywords), batch_size)]
-        
-        for batch_index, url_batch in enumerate(url_batches):
-            logger.info(f"处理第 {batch_index+1}/{len(url_batches)} 批关键词，包含 {len(url_batch)} 个URL")
-            
-            # 提取这一批URL对应的关键词
-            batch_keywords = []
-            url_to_keyword = {}
-            
-            for url in url_batch:
-                keywords = valid_url_keywords[url]
-                batch_keywords.append(keywords)
-                url_to_keyword[keywords] = url
-            
-            # 批量查询API
-            combined_keywords = "，".join(batch_keywords)  # 使用中文逗号分隔，符合API要求
-            
+
+        # 将关键词分成多个批次处理
+        keywords_list = list(valid_url_keywords.values())
+        keyword_batches = [keywords_list[i:i+batch_size] for i in range(0, len(keywords_list), batch_size)]
+
+        for batch_index, keyword_batch in enumerate(keyword_batches):
+            combined_keywords = ",".join(keyword_batch)
+            logger.info(f"处理第 {batch_index+1}/{len(keyword_batches)} 批关键词，包含 {len(keyword_batch)} 个关键词")
+
             try:
                 api_url = f"{self.api_url}{combined_keywords}"
-                
-                # 添加调试日志，打印完整请求URL
                 logger.debug(f"批量查询API URL: {api_url}")
-                
-                # 检查URL格式是否正确
-                if not api_url.startswith('http'):
-                    logger.error(f"API URL格式不正确: {api_url}")
-                    continue
-                    
-                # 进行请求，添加错误详情
-                try:
-                    response = requests.get(api_url, timeout=10)
-                    
-                    if response.status_code == 200:
-                        batch_data = response.json()
-                        
-                        # 处理批量结果，将结果与URL关联
-                        self._process_batch_results(batch_data, url_to_keyword, results)
-                    else:
-                        logger.warning(f"API请求失败，状态码: {response.status_code}")
-                        logger.debug(f"响应内容: {response.text}")
-                
-                except requests.exceptions.RequestException as req_err:
-                    logger.error(f"请求异常: {req_err}")
-                    continue
-                except json.JSONDecodeError as json_err:
-                    logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text[:100]}...")
-                    continue
-            
-            except Exception as e:
-                logger.error(f"查询关键词API时出错: {e}")
-                # 记录完整的错误堆栈
-                logger.exception("完整错误信息:")
-                # 继续处理其他批次
-                continue
-            
-            # 添加短暂延迟避免API限流
-            time.sleep(1)
-        
+
+                response = requests.get(api_url, timeout=70)
+
+                if response.status_code == 200:
+                    batch_data = response.json()
+                    self._process_batch_results(batch_data, valid_url_keywords, results)
+                else:
+                    logger.warning(f"API请求失败，状态码: {response.status_code}")
+                    logger.debug(f"响应内容: {response.text}")
+
+            except requests.exceptions.RequestException as req_err:
+                logger.error(f"请求异常: {req_err}")
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text[:100]}...")
+
+            # 在每次请求之间随机等待3到7秒
+            wait_time = random.randint(3, 7)
+            logger.info(f"等待 {wait_time} 秒后进行下一次请求")
+            time.sleep(wait_time)
+
         logger.info(f"关键词批量查询完成，共查询了 {len(valid_url_keywords)} 个URL的关键词")
         return results
     
