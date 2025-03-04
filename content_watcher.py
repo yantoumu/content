@@ -681,7 +681,7 @@ class ContentWatcher:
         
         # 构建消息
         message_parts = []
-        current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+        current_date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         message_parts.append(f"🔔 <b>网站内容更新通知</b> ({current_date})")
         message_parts.append(f"")
         message_parts.append(f"共发现 {total_updates} 个更新")
