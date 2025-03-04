@@ -571,7 +571,7 @@ class ContentWatcher:
 
             try:
                 api_url = f"{self.api_url}{combined_keywords}"
-                logger.debug(f"批量查询API URL: {api_url}")
+                logger.debug(f"构造的API请求URL: {api_url}")
 
                 response = requests.get(api_url, timeout=70)
 
@@ -585,7 +585,7 @@ class ContentWatcher:
             except requests.exceptions.RequestException as req_err:
                 logger.error(f"请求异常: {req_err}")
             except json.JSONDecodeError as json_err:
-                logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text[:100]}...")
+                logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text}")
 
             # 在每次请求之间随机等待3到7秒
             wait_time = random.randint(3, 7)
@@ -600,7 +600,7 @@ class ContentWatcher:
         """处理批量查询结果
         
         Args:
-            batch_data: API返回的数据
+            batch_data: API返回的数据 a
             url_to_keyword: URL到关键词的映射
             results: 结果字典，会被此函数修改
         """
