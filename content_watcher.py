@@ -520,7 +520,7 @@ class ContentWatcher:
         logger.info(f"开始批量查询关键词，共有 {len(valid_url_keywords)} 个URL")
         
         # 每批处理的URL数量
-        batch_size = 10
+        batch_size = 5
         
         # 将URL分成多个批次处理
         url_batches = [list(valid_url_keywords.keys())[i:i+batch_size] for i in range(0, len(valid_url_keywords), batch_size)]
