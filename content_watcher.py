@@ -111,6 +111,9 @@ class ContentWatcher:
             logger.error("未提供网站URL列表")
             raise ValueError("SITEMAP_URLS必须是有效的JSON数组")
             
+        # 记录API URL的设置情况
+        logger.info(f"关键词API URL设置状态: 【{self.api_url}】, 长度: {len(self.api_url)}")
+            
         if not self.api_url:
             logger.warning("未设置关键词API URL，将不会查询关键词信息")
     
@@ -495,6 +498,16 @@ class ContentWatcher:
         if is_first_run:
             logger.info("首次运行，跳过关键词API查询")
             return results
+            
+        # 再次检查API URL是否设置
+        if not self.api_url:
+            logger.warning("关键词API URL未设置，跳过关键词查询")
+            return results
+            
+        # 记录环境变量中的API URL值，用于调试
+        env_api_url = os.environ.get('KEYWORDS_API_URL', '未设置')
+        logger.info(f"环境变量中的KEYWORDS_API_URL值: 【{env_api_url}】")
+        logger.info(f"当前使用的API URL: 【{self.api_url}】")
         
         # 过滤掉没有关键词的URL，避免无效查询
         valid_url_keywords = {url: keywords for url, keywords in url_keywords_map.items() if keywords.strip()}
@@ -529,19 +542,39 @@ class ContentWatcher:
             
             try:
                 api_url = f"{self.api_url}{combined_keywords}"
-                response = requests.get(api_url, timeout=10)
                 
-                if response.status_code == 200:
-                    batch_data = response.json()
+                # 添加调试日志，打印完整请求URL
+                logger.debug(f"批量查询API URL: {api_url}")
+                
+                # 检查URL格式是否正确
+                if not api_url.startswith('http'):
+                    logger.error(f"API URL格式不正确: {api_url}")
+                    continue
                     
-                    # 处理批量结果，将结果与URL关联
-                    self._process_batch_results(batch_data, url_to_keyword, results)
-                else:
-                    logger.warning(f"API请求失败，状态码: {response.status_code}")
-                    logger.debug(f"响应内容: {response.text}")
+                # 进行请求，添加错误详情
+                try:
+                    response = requests.get(api_url, timeout=10)
+                    
+                    if response.status_code == 200:
+                        batch_data = response.json()
+                        
+                        # 处理批量结果，将结果与URL关联
+                        self._process_batch_results(batch_data, url_to_keyword, results)
+                    else:
+                        logger.warning(f"API请求失败，状态码: {response.status_code}")
+                        logger.debug(f"响应内容: {response.text}")
+                
+                except requests.exceptions.RequestException as req_err:
+                    logger.error(f"请求异常: {req_err}")
+                    continue
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text[:100]}...")
+                    continue
             
             except Exception as e:
                 logger.error(f"查询关键词API时出错: {e}")
+                # 记录完整的错误堆栈
+                logger.exception("完整错误信息:")
                 # 继续处理其他批次
                 continue
             
