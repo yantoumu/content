@@ -617,8 +617,17 @@ class ContentWatcher:
 
     def send_telegram_notification(self, updates_by_site: Dict[str, List[str]]) -> bool:
         """发送Telegram通知"""
+        # 检查是否有任何更新
         if not any(updates_by_site.values()):
             logger.info("没有更新，不发送通知")
+            return True
+            
+        # 过滤空列表，确保只处理有实际更新的站点
+        updates_by_site = {site_id: urls for site_id, urls in updates_by_site.items() if urls}
+        
+        # 再次检查过滤后是否还有更新
+        if not updates_by_site:
+            logger.info("过滤后没有更新，不发送通知")
             return True
         
         # 计算总更新数量
@@ -793,76 +802,105 @@ class ContentWatcher:
             url_keywords_map: URL到关键词的映射
             keyword_results: URL到API响应结果的映射
         """
-        # 显示每个URL的详细信息
-        for i, url in enumerate(urls, 1):
-            message_parts.append(f"{i}. <a href='{url}'>{url.split('/')[-1].replace('-', ' ')}</a>")
-            
-            # 提取URL中的关键词
+        # 分类URLs
+        urls_with_data = []
+        urls_without_data = []
+        
+        # 处理每个URL，分类并提取数据
+        for url in urls:
+            url_name = url.split('/')[-1].replace('-', ' ')
+            url_link = f"<a href='{url}'>{url_name}</a>"
             keywords = url_keywords_map.get(url, "")
-            if keywords:
-                message_parts.append(f"   关键词: {keywords}")
+            
+            if url in keyword_results and keyword_results[url].get('data', []):
+                # 有搜索数据的URL
+                api_data = keyword_results[url]
+                data_items = api_data.get('data', [])
                 
-                # 添加关键词信息到消息中
-                if url in keyword_results:
-                    api_data = keyword_results[url]
-                    data_items = api_data.get('data', [])
+                if data_items:
+                    # 构建带有关键词数据的URL信息
+                    keyword_data_list = []
                     
-                    if data_items:
-                        # 显示总结果数
-                        total_results = api_data.get('total_results', 0)
-                        geo_target = api_data.get('geo_target', '全球')
-                        message_parts.append(f"   📊 搜索数据 ({geo_target}) | 🔍 总结果数: {total_results}")
+                    for kw_data in data_items:
+                        keyword = kw_data.get('keyword', '')
+                        metrics = kw_data.get('metrics', {})
                         
-                        # 显示所有关键词信息，不限制数量
-                        for kw_data in data_items:
-                            keyword = kw_data.get('keyword', '')
-                            metrics = kw_data.get('metrics', {})
+                        avg_searches = metrics.get('avg_monthly_searches', 0)
+                        competition = metrics.get('competition', 'N/A')
+                        
+                        # 转换竞争度
+                        competition_text = "低" if competition == "LOW" else "中" if competition == "MEDIUM" else "高" if competition == "HIGH" else "无数据"
+                        
+                        # 根据竞争度选择图标
+                        icon = "🟢" if competition == "LOW" else "🟡" if competition == "MEDIUM" else "🔴" if competition == "HIGH" else "⚪"
+                        
+                        # 获取月度搜索数据
+                        monthly_searches = metrics.get("monthly_searches", [])
+                        monthly_data = []
+                        if monthly_searches:
+                            # 按时间顺序排序月度数据
+                            monthly_searches = sorted(
+                                monthly_searches,
+                                key=lambda x: (x.get("year", ""), x.get("month", ""))
+                            )
+                            # 保存最近6个月数据
+                            recent_months = monthly_searches[-6:] if len(monthly_searches) > 6 else monthly_searches
+                            monthly_data = recent_months
                             
-                            avg_searches = metrics.get('avg_monthly_searches', 0)
-                            competition = metrics.get('competition', 'N/A')
-                            
-                            # 转换竞争度
-                            competition_text = "低" if competition == "LOW" else "中" if competition == "MEDIUM" else "高" if competition == "HIGH" else "无数据"
-                            
-                            # 根据竞争度选择图标
-                            icon = "🟢" if competition == "LOW" else "🟡" if competition == "MEDIUM" else "🔴" if competition == "HIGH" else "⚪"
-                            
-                            # 添加关键词信息
-                            message_parts.append(f"   {icon} <b>{keyword}</b> | 月均搜索量: {avg_searches} | 竞争度: {competition_text}")
-                            
-                            # 获取月度搜索数据
-                            monthly_searches = metrics.get("monthly_searches", [])
-                            if monthly_searches:
-                                # 按时间顺序排序月度数据
-                                monthly_searches = sorted(
-                                    monthly_searches,
-                                    key=lambda x: (x.get("year", ""), x.get("month", ""))
-                                )
-                                
-                                # 创建月度趋势字符串
-                                month_trends = []
-                                # 显示最近6个月数据
-                                recent_months = monthly_searches[-6:] if len(monthly_searches) > 6 else monthly_searches
-                                for month_info in recent_months:
-                                    year = month_info.get("year", "")
-                                    month = month_info.get("month", "")
-                                    searches = month_info.get("searches", 0)
-                                    
-                                    # 将月份名称转换为短格式
-                                    month_short = month[:3].title() if month else ""
-                                    month_trends.append(f"{year}/{month_short}: {searches}")
-                                
-                                # 添加月度趋势到关键词信息
-                                message_parts.append(f"     📈 月度趋势: {', '.join(month_trends)}")
-                    else:
-                        message_parts.append(f"   ⚪ 无搜索数据")
+                        keyword_data_list.append((keyword, avg_searches, competition_text, icon, monthly_data))
+                    
+                    # 按搜索量排序关键词
+                    keyword_data_list.sort(key=lambda x: x[1], reverse=True)
+                    urls_with_data.append((url_link, keyword_data_list))
                 else:
-                    message_parts.append(f"   ⚪ 无搜索数据")
+                    urls_without_data.append((url_link, keywords))
             else:
-                message_parts.append(f"   ⚪ 无关键词数据")
+                # 无搜索数据的URL
+                urls_without_data.append((url_link, keywords))
+        
+        # 1. 显示有搜索数据的URL
+        if urls_with_data:
+            message_parts.append("<b>🔍 有搜索数据的URLs:</b>")
+            
+            for i, (url_link, keyword_list) in enumerate(urls_with_data, 1):
+                message_parts.append(f"{i}. {url_link}")
                 
-            # 添加空行分隔不同URL
-            message_parts.append("")
+                for j, (keyword, avg_searches, competition_text, icon, monthly_data) in enumerate(keyword_list, 1):
+                    # 显示带有链接的关键词和搜索量
+                    message_parts.append(f"   {icon} <b>{keyword}</b> | 月均搜索量: {avg_searches} | 竞争度: {competition_text}")
+                    
+                    # 显示完整的月度搜索数据
+                    if monthly_data:
+                        month_trends = []
+                        for month_info in monthly_data:
+                            year = month_info.get("year", "")
+                            month = month_info.get("month", "")
+                            searches = month_info.get("searches", 0)
+                            
+                            # 月份名称转换为短格式
+                            month_short = month[:3].title() if month else ""
+                            month_trends.append(f"{year}/{month_short}: {searches}")
+                        
+                        message_parts.append(f"     📈 月度趋势: {', '.join(month_trends)}")
+                
+                # URL之间添加空行分隔
+                message_parts.append("")
+        
+        # 2. 显示无搜索数据的URL
+        if urls_without_data:
+            message_parts.append("<b>⚪ 无搜索数据:</b>")
+            
+            # 分批显示无搜索数据的URL
+            no_data_chunks = [urls_without_data[i:i+10] for i in range(0, len(urls_without_data), 10)]
+            for chunk in no_data_chunks:
+                chunk_links = []
+                for url_link, keywords in chunk:
+                    if keywords:
+                        chunk_links.append(f"{url_link} ({keywords})")
+                    else:
+                        chunk_links.append(url_link)
+                
+                message_parts.append(", ".join(chunk_links))
     
     def _format_compact_updates(self, message_parts: List[str], urls: List[str],
                                url_keywords_map: Dict[str, str], 
