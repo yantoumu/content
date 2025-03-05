@@ -401,7 +401,6 @@ class ContentWatcher:
         # 构建格式化文本
         parts = []
         parts.append(f"📊 <b>关键词搜索数据</b> ({info.get('geo_target', '全球')})")
-        parts.append(f"🔍 总结果数: {info.get('total_results', 0)}")
         
         # 对关键词数据进行排序，月均搜索量高的排在前面
         sorted_data = sorted(
@@ -410,8 +409,9 @@ class ContentWatcher:
             reverse=True
         )
         
-        # 显示所有关键词的详细数据
-        for i, keyword_data in enumerate(sorted_data):
+        # 只显示搜索量最大的关键词
+        if sorted_data:
+            keyword_data = sorted_data[0]
             keyword = keyword_data.get("keyword", "未知关键词")
             metrics = keyword_data.get("metrics", {})
             
@@ -599,34 +599,56 @@ class ContentWatcher:
     
     def _process_batch_results(self, batch_data: Dict[str, Any], url_to_keyword: Dict[str, str], 
                               results: Dict[str, Dict[str, Any]]) -> None:
-        """处理批量查询结果
+        """处理批量查询的结果
         
         Args:
-            batch_data: API返回的数据 a
+            batch_data: API返回的批量查询结果
             url_to_keyword: URL到关键词的映射
-            results: 结果字典，会被此函数修改
+            results: 存储处理结果的字典
         """
-        if not batch_data or 'data' not in batch_data:
+        if not batch_data or batch_data.get('status') != 'success':
+            logger.warning("API返回结果无效或状态不是success")
             return
             
-        for keyword_data in batch_data.get('data', []):
-            keyword = keyword_data.get('keyword', '')
+        # 处理每个URL的关键词结果
+        for url, original_keyword in url_to_keyword.items():
+            # 为该URL创建结果集合
+            if url not in results:
+                results[url] = {
+                    'status': 'success',
+                    'geo_target': batch_data.get('geo_target', '全球'),
+                    'total_results': 0,
+                    'data': []
+                }
+                
+            # 查找原始关键词和搜索量最大的关键词
+            original_keyword_data = None
+            max_search_keyword_data = None
+            max_search_volume = 0
             
-            # 查找这个关键词对应的URL
-            for url, kw in url_to_keyword.items():
-                if keyword.lower() in kw.lower() or kw.lower() in keyword.lower():
-                    # 为该URL创建结果集合
-                    if url not in results:
-                        results[url] = {
-                            'status': 'success',
-                            'geo_target': batch_data.get('geo_target', '全球'),
-                            'total_results': 0,
-                            'data': []
-                        }
-                    
-                    # 添加关键词数据
-                    results[url]['data'].append(keyword_data)
-                    results[url]['total_results'] = len(results[url]['data'])
+            for keyword_data in batch_data.get('data', []):
+                keyword = keyword_data.get('keyword', '')
+                
+                # 检查是否是原始关键词
+                if keyword.lower() == original_keyword.lower():
+                    original_keyword_data = keyword_data
+                
+                # 检查是否是搜索量最大的关键词
+                search_volume = keyword_data.get('metrics', {}).get('avg_monthly_searches', 0)
+                if search_volume > max_search_volume:
+                    max_search_volume = search_volume
+                    max_search_keyword_data = keyword_data
+            
+            # 添加原始关键词数据（如果找到）
+            if original_keyword_data:
+                results[url]['data'].append(original_keyword_data)
+                
+            # 添加搜索量最大的关键词数据（如果不是原始关键词）
+            if max_search_keyword_data and max_search_keyword_data != original_keyword_data:
+                results[url]['data'].append(max_search_keyword_data)
+                
+            # 更新结果数量
+            results[url]['total_results'] = len(results[url]['data'])
 
     def send_telegram_notification(self, updates_by_site: Dict[str, List[str]]) -> bool:
         """发送Telegram通知"""
