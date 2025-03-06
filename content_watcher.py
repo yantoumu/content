@@ -826,116 +826,125 @@ class ContentWatcher:
             
         return all_success
     
-    def _format_detailed_updates(self, message_parts: List[str], urls: List[str], 
-                                url_keywords_map: Dict[str, str], 
-                                keyword_results: Dict[str, Dict[str, Any]]) -> None:
-        """格式化详细的更新信息，适用于少量URL
+    def _format_detailed_updates(self, message_parts: List[str], urls: List[str],
+                               url_keywords_map: Dict[str, str],
+                               keyword_results: Dict[str, Dict[str, Any]]) -> None:
+        """
+        格式化详细的更新信息
         
         Args:
-            message_parts: 消息部分列表，会被此函数修改
-            urls: URL列表
-            url_keywords_map: URL到关键词的映射
+            message_parts: 消息部分列表，将被修改
+            urls: 要格式化的URL列表
+            url_keywords_map: URL到提取关键词的映射
             keyword_results: URL到API响应结果的映射
         """
-        # 分类URLs
+        if not urls:
+            return
+            
+        # 将 URL 分为两组：有关键词数据的和没有关键词数据的
         urls_with_data = []
         urls_without_data = []
         
-        # 处理每个URL，分类并提取数据
         for url in urls:
-            url_name = url.split('/')[-1].replace('-', ' ')
-            url_link = f"<a href='{url}'>{url_name}</a>"
-            keywords = url_keywords_map.get(url, "")
-            
             if url in keyword_results and keyword_results[url].get('data', []):
-                # 有搜索数据的URL
-                api_data = keyword_results[url]
-                data_items = api_data.get('data', [])
-                
-                if data_items:
-                    # 构建带有关键词数据的URL信息
-                    keyword_data_list = []
-                    
-                    for kw_data in data_items:
-                        keyword = kw_data.get('keyword', '')
-                        metrics = kw_data.get('metrics', {})
-                        
-                        avg_searches = metrics.get('avg_monthly_searches', 0)
-                        competition = metrics.get('competition', 'N/A')
-                        
-                        # 转换竞争度
-                        competition_text = "低" if competition == "LOW" else "中" if competition == "MEDIUM" else "高" if competition == "HIGH" else "无数据"
-                        
-                        # 根据竞争度选择图标
-                        icon = "🟢" if competition == "LOW" else "🟡" if competition == "MEDIUM" else "🔴" if competition == "HIGH" else "⚪"
-                        
-                        # 获取月度搜索数据
-                        monthly_searches = metrics.get("monthly_searches", [])
-                        monthly_data = []
-                        if monthly_searches:
-                            # 按时间顺序排序月度数据
-                            monthly_searches = sorted(
-                                monthly_searches,
-                                key=lambda x: (x.get("year", ""), x.get("month", ""))
-                            )
-                            # 保存最近6个月数据
-                            recent_months = monthly_searches[-6:] if len(monthly_searches) > 6 else monthly_searches
-                            monthly_data = recent_months
-                            
-                        keyword_data_list.append((keyword, avg_searches, competition_text, icon, monthly_data))
-                    
-                    # 按搜索量排序关键词
-                    keyword_data_list.sort(key=lambda x: x[1], reverse=True)
-                    urls_with_data.append((url_link, keyword_data_list))
-                else:
-                    urls_without_data.append((url_link, keywords))
+                urls_with_data.append(url)
             else:
-                # 无搜索数据的URL
-                urls_without_data.append((url_link, keywords))
+                urls_without_data.append(url)
         
-        # 1. 显示有搜索数据的URL
+        # 1. 先处理有关键词数据的URL
         if urls_with_data:
-            message_parts.append("<b>🔍 有搜索数据的URLs:</b>")
+            message_parts.append("\n🔍 <b>有详细搜索数据的URL：</b>")
             
-            for i, (url_link, keyword_list) in enumerate(urls_with_data, 1):
-                message_parts.append(f"{i}. {url_link}")
+            for i, url in enumerate(urls_with_data):
+                api_data = keyword_results[url]
+                keyword_data_list = api_data.get('data', [])
                 
-                for j, (keyword, avg_searches, competition_text, icon, monthly_data) in enumerate(keyword_list, 1):
-                    # 显示带有链接的关键词和搜索量
-                    message_parts.append(f"   {icon} <b>{keyword}</b> | 月均搜索量: {avg_searches} | 竞争度: {competition_text}")
+                # 只显示至多两个关键词：原始关键词和搜索量最大的关键词
+                if not keyword_data_list:
+                    continue
                     
-                    # 显示完整的月度搜索数据
-                    if monthly_data:
-                        month_trends = []
-                        for month_info in monthly_data:
-                            year = month_info.get("year", "")
-                            month = month_info.get("month", "")
-                            searches = month_info.get("searches", 0)
-                            
-                            # 月份名称转换为短格式
-                            month_short = month[:3].title() if month else ""
-                            month_trends.append(f"{year}/{month_short}: {searches}")
+                # 获取原始查询的关键词
+                original_keyword = url_keywords_map.get(url, "")
+                
+                # 如果有关键词数据，显示详细信息
+                message_parts.append(f"\n{i+1}. <b>{original_keyword}</b>")
+                
+                # 对关键词数据进行整理，只显示最多两个关键词
+                processed_keywords = []
+                
+                # 查找原始关键词和搜索量最大的关键词
+                original_keyword_data = None
+                max_search_keyword_data = None
+                max_search_volume = 0
+                
+                for kw_data in keyword_data_list:
+                    keyword = kw_data.get('keyword', '')
+                    search_volume = kw_data.get('metrics', {}).get('avg_monthly_searches', 0)
+                    
+                    # 检查是否是原始关键词
+                    if keyword.lower() == original_keyword.lower():
+                        original_keyword_data = kw_data
                         
-                        message_parts.append(f"     📈 月度趋势: {', '.join(month_trends)}")
+                    # 检查是否是搜索量最大的关键词
+                    if search_volume > max_search_volume:
+                        max_search_volume = search_volume
+                        max_search_keyword_data = kw_data
                 
-                # URL之间添加空行分隔
-                message_parts.append("")
+                # 添加原始关键词数据（如果找到）
+                if original_keyword_data:
+                    processed_keywords.append(original_keyword_data)
+                    
+                # 添加搜索量最大的关键词数据（如果不是原始关键词）
+                if max_search_keyword_data and max_search_keyword_data != original_keyword_data:
+                    processed_keywords.append(max_search_keyword_data)
+                
+                # 显示处理后的关键词数据
+                for kw_data in processed_keywords:
+                    keyword = kw_data.get('keyword', '')
+                    metrics = kw_data.get('metrics', {})
+                    avg_searches = metrics.get('avg_monthly_searches', 0)
+                    
+                    # 添加关键词信息
+                    message_parts.append(f"   🔑 <b>{keyword}</b> [{avg_searches}]")
+                    
+                    # 获取月度搜索数据并显示趋势
+                    monthly_searches = metrics.get('monthly_searches', [])
+                    if monthly_searches:
+                        # 按时间顺序排序月度数据
+                        monthly_searches = sorted(
+                            monthly_searches,
+                            key=lambda x: (x.get('year', ''), x.get('month', ''))
+                        )
+                        
+                        # 构建月度趋势数据
+                        trend_parts = []
+                        for month_info in monthly_searches:
+                            year = month_info.get('year', '')
+                            month = month_info.get('month', '')
+                            searches = month_info.get('searches', 0)
+                            
+                            # 将月份名称转换为短格式
+                            month_short = month[:3].title() if month else ""
+                            trend_parts.append(f"{year}/{month_short}: {searches}")
+                        
+                        # 添加月度趋势信息
+                        if trend_parts:
+                            message_parts.append(f"   📈 月度趋势: {', '.join(trend_parts)}")
         
-        # 2. 显示无搜索数据的URL
+        # 2. 然后处理没有关键词数据的URL
         if urls_without_data:
-            message_parts.append("<b>⚪ 无搜索数据:</b>")
+            message_parts.append("\n🔍 <b>无搜索数据的URL：</b>")
             
-            # 分批显示无搜索数据的URL
-            no_data_chunks = [urls_without_data[i:i+10] for i in range(0, len(urls_without_data), 10)]
-            for chunk in no_data_chunks:
-                chunk_links = []
-                for url_link, keywords in chunk:
-                    if keywords:
-                        chunk_links.append(f"{url_link} ({keywords})")
-                    else:
-                        chunk_links.append(url_link)
+            # 分组显示这些URL（每3个为一组）
+            for i in range(0, len(urls_without_data), 3):
+                group = urls_without_data[i:i+3]
+                encoded_urls = []
                 
-                message_parts.append(", ".join(chunk_links))
+                for url in group:
+                    keyword = url_keywords_map.get(url, "未知关键词")
+                    encoded_urls.append(f"<b>{keyword}</b>")
+                
+                message_parts.append(f"\n{', '.join(encoded_urls)}")
     
     def _format_compact_updates(self, message_parts: List[str], urls: List[str],
                                url_keywords_map: Dict[str, str], 
