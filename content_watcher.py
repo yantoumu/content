@@ -849,6 +849,9 @@ class ContentWatcher:
         global_highest_volume_keyword = None
         global_highest_volume = 0
         
+        # 跟踪符合增长趋势的关键词
+        trending_keywords = []
+        
         for url in urls:
             if url in keyword_results and keyword_results[url].get('data', []):
                 urls_with_data.append(url)
@@ -879,6 +882,7 @@ class ContentWatcher:
                 highest_volume_keyword_data = None
                 highest_volume = 0
                 
+                # 检查所有关键词数据的月度趋势
                 for kw_data in keyword_data_list:
                     keyword = kw_data.get('keyword', '')
                     search_volume = kw_data.get('metrics', {}).get('avg_monthly_searches', 0)
@@ -896,6 +900,48 @@ class ContentWatcher:
                     if search_volume > global_highest_volume:
                         global_highest_volume = search_volume
                         global_highest_volume_keyword = kw_data
+                    
+                    # 检查月度趋势数据，寻找符合特定增长模式的关键词
+                    monthly_searches = kw_data.get('metrics', {}).get('monthly_searches', [])
+                    if monthly_searches:
+                        # 按时间顺序排序月度数据
+                        sorted_monthly_data = sorted(
+                            monthly_searches,
+                            key=lambda x: (x.get('year', ''), x.get('month', ''))
+                        )
+                        
+                        # 创建月份到搜索量的映射
+                        month_to_searches = {}
+                        for month_info in sorted_monthly_data:
+                            year = month_info.get('year', '')
+                            month = month_info.get('month', '')
+                            searches = month_info.get('searches', 0)
+                            month_key = f"{year}/{month}"
+                            month_to_searches[month_key] = searches
+                        
+                        # 检查特定月份的趋势模式: 10月和11月为0，然后持续增长
+                        oct_searches = month_to_searches.get('2024/October', 0)
+                        nov_searches = month_to_searches.get('2024/November', 0)
+                        dec_searches = month_to_searches.get('2024/December', 0)
+                        jan_searches = month_to_searches.get('2025/January', 0)
+                        feb_searches = month_to_searches.get('2025/February', 0)
+                        
+                        # 判断是否符合增长趋势条件
+                        is_trending = (
+                            oct_searches == 0 and 
+                            nov_searches == 0 and 
+                            dec_searches > 0 and 
+                            jan_searches > dec_searches and 
+                            feb_searches > jan_searches
+                        )
+                        
+                        if is_trending:
+                            # 记录趋势关键词
+                            trending_keywords.append({
+                                'keyword': keyword,
+                                'search_volume': search_volume,
+                                'monthly_data': sorted_monthly_data
+                            })
                 
                 # 记录已处理的URL，避免重复
                 processed_urls.append(url)
@@ -1011,10 +1057,41 @@ class ContentWatcher:
                     encoded_urls.append(f"<b>{keyword}</b>")
                 
                 message_parts.append(f"\n{', '.join(encoded_urls)}")
-    
+        
+        # 3. 显示符合增长趋势的关键词
+        if trending_keywords:
+            # 对趋势关键词按搜索量排序
+            trending_keywords.sort(key=lambda x: x['search_volume'], reverse=True)
+            
+            message_parts.append("\n🚀 <b>检测到增长趋势的关键词：</b>")
+            for i, trend_data in enumerate(trending_keywords):
+                keyword = trend_data['keyword']
+                search_volume = trend_data['search_volume']
+                
+                # 添加关键词信息
+                message_parts.append(f"\n{i+1}. <b>{keyword}</b> [{search_volume}]")
+                
+                # 显示月度搜索趋势
+                monthly_data = trend_data['monthly_data']
+                if monthly_data:
+                    # 构建月度趋势数据
+                    trend_parts = []
+                    for month_info in monthly_data:
+                        year = month_info.get('year', '')
+                        month = month_info.get('month', '')
+                        searches = month_info.get('searches', 0)
+                        
+                        # 将月份名称转换为短格式
+                        month_short = month[:3].title() if month else ""
+                        trend_parts.append(f"{year}/{month_short}: {searches}")
+                    
+                    # 添加月度趋势信息
+                    if trend_parts:
+                        message_parts.append(f"   📈 月度趋势: {', '.join(trend_parts)}")
+
     def _format_compact_updates(self, message_parts: List[str], urls: List[str],
-                               url_keywords_map: Dict[str, str], 
-                               keyword_results: Dict[str, Dict[str, Any]]) -> None:
+                              url_keywords_map: Dict[str, str], 
+                              keyword_results: Dict[str, Dict[str, Any]]) -> None:
         """格式化紧凑的更新信息，适用于中等数量URL
         
         Args:
@@ -1107,10 +1184,10 @@ class ContentWatcher:
                     else:
                         chunk_links.append(url_link)
                 message_parts.append(", ".join(chunk_links))
-    
+
     def _format_summary_updates(self, message_parts: List[str], urls: List[str], 
-                               url_keywords_map: Dict[str, str], 
-                               keyword_results: Dict[str, Dict[str, Any]]) -> None:
+                              url_keywords_map: Dict[str, str], 
+                              keyword_results: Dict[str, Dict[str, Any]]) -> None:
         """格式化汇总更新信息，适用于大量URL
         
         Args:
@@ -1159,8 +1236,6 @@ class ContentWatcher:
                                 medium_volume.append((url_link, search_volume, keyword_text, monthly_data))
                             else:
                                 low_volume.append((url_link, search_volume, keyword_text, monthly_data))
-                    else:
-                        no_data.append((url_link, keywords))
                 except Exception as e:
                     logger.error(f"处理关键词数据时出错: {e}")
                     no_data.append((url_link, keywords))
