@@ -491,6 +491,10 @@ class ContentWatcher:
         updated_urls = []
         new_encrypted_data = []
         
+        # 计数器
+        new_url_count = 0
+        updated_url_count = 0
+        
         for url, lastmod in sitemap_data.items():
             # 检查URL是否为新URL或今天更新的URL
             is_new = url not in previous_urls
@@ -498,158 +502,216 @@ class ContentWatcher:
             # 对于已存在的URL，检查lastmod是否更新
             is_updated = False
             if not is_new and lastmod:
-                previous_lastmod = previous_urls.get(url)
-                is_updated = previous_lastmod != lastmod and self._is_updated_today(lastmod)
+                prev_lastmod = previous_urls.get(url)
+                if prev_lastmod != lastmod and self._is_updated_today(lastmod):
+                    is_updated = True
             
-            # 新URL或今天更新的URL都被视为"今天的更新"
+            # 添加新URL或更新的URL
             if is_new or is_updated:
-                # 首次运行时，可能有大量URL被认为是"新的"
-                # 为了避免发送过多通知，限制首次运行时报告的更新数量
-                if not is_first_run or len(updated_urls) < self.max_first_run_updates:
-                    updated_urls.append(url)
-                    # 不再记录具体URL，只记录检测到更新的数量和类型
-                    if is_new:
-                        # 不输出具体URL
-                        pass
-                    else:
-                        # 不输出具体URL
-                        pass
+                if is_new:
+                    new_url_count += 1
+                else:
+                    updated_url_count += 1
+                
+                updated_urls.append(url)
             
-            # 加密和保存所有URL
+            # 创建加密后的URL数据以保存
             encrypted_url = self._encrypt_url(url)
             new_encrypted_data.append({
                 'encrypted_url': encrypted_url,
                 'lastmod': lastmod
             })
         
+        # 如果没有变化，直接返回空列表
+        if not updated_urls:
+            logger.info(f"网站 {site_id} 没有发现更新")
+            
+            # 更新储存的数据
+            self.previous_data[site_id] = new_encrypted_data
+            self._save_data(self.previous_data)
+            
+            return []
+            
+        # 提取更新URL的关键词
+        url_keywords_map = {}
+        for url in updated_urls:
+            keyword = self._extract_keywords_from_url(url)
+            url_keywords_map[url] = keyword
+        
+        # 如果是首次运行且URL数量很多，限制通知的URL数量
+        if is_first_run and len(updated_urls) > self.max_first_run_updates:
+            logger.info(f"首次运行，更新URL数量({len(updated_urls)})超过限制({self.max_first_run_updates})，将只发送部分更新")
+            # 随机选择一些URL作为示例
+            import random
+            sample_urls = random.sample(updated_urls, self.max_first_run_updates)
+            updated_urls = sample_urls
+            # 更新关键词映射
+            url_keywords_map = {url: url_keywords_map[url] for url in updated_urls if url in url_keywords_map}
+        
+        # 构建通知消息
+        message_parts = []
+        message_parts.append(f"🔔 <b>网站内容更新通知</b> ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+        message_parts.append(f"\n共发现 {len(updated_urls)} 个更新")
+        
+        # 批量查询关键词信息
+        keyword_results = {}
+        if not is_first_run and url_keywords_map:
+            try:
+                # 获取所有关键词列表
+                keywords_list = list(url_keywords_map.values())
+                # 批量查询关键词
+                raw_keyword_data = self._batch_query_keywords(keywords_list)
+                
+                # 将关键词数据转换为URL到API响应的映射
+                for url, keyword in url_keywords_map.items():
+                    if keyword in raw_keyword_data:
+                        # 为每个URL创建一个包含完整API响应格式的结果
+                        keyword_results[url] = {
+                            'status': 'success',
+                            'geo_target': '全球',
+                            'total_results': 1,
+                            'data': [raw_keyword_data[keyword]]  # 添加原始关键词数据
+                        }
+                        
+                        # 查找关键词的相关关键词，最多添加3个高搜索量的相关词
+                        related_keywords = []
+                        for k, v in raw_keyword_data.items():
+                            # 跳过与原始关键词完全相同的项
+                            if k.lower() == keyword.lower():
+                                continue
+                                
+                            # 检查是否与原始关键词有关联性（包含关系或相似性）
+                            if (keyword.lower() in k.lower() or 
+                                k.lower() in keyword.lower() or 
+                                self._calculate_similarity(k.lower(), keyword.lower()) > 0.5):
+                                related_keywords.append(v)
+                        
+                        # 按搜索量排序并添加最多3个相关关键词
+                        if related_keywords:
+                            related_keywords.sort(
+                                key=lambda x: x.get('metrics', {}).get('avg_monthly_searches', 0),
+                                reverse=True
+                            )
+                            # 添加最多3个高搜索量的相关词
+                            for related in related_keywords[:3]:
+                                keyword_results[url]['data'].append(related)
+                                keyword_results[url]['total_results'] += 1
+            except Exception as e:
+                logger.error(f"批量查询关键词信息时出错: {e}")
+        
+        # 格式化详细更新信息
+        self._format_detailed_updates(message_parts, updated_urls, url_keywords_map, keyword_results)
+        
+        # 发送通知消息
+        notification_sent = self.send_telegram_notification({
+            site_id: message_parts
+        })
+        
         # 更新数据存储
         self.previous_data[site_id] = new_encrypted_data
+        self._save_data(self.previous_data)
         
-        # 如果是首次运行并且有大量更新，记录日志
-        if is_first_run and len(sitemap_data) > self.max_first_run_updates:
-            logger.info(f"首次运行，网站 {site_id} 共有 {len(sitemap_data)} 个URL，但只报告了前 {len(updated_urls)} 个")
-            
-        # 新增：记录新URL的数量统计
-        new_count = sum(1 for url in updated_urls if url not in previous_urls)
-        updated_count = len(updated_urls) - new_count
-        if new_count > 0:
-            logger.info(f"网站 {site_id} 有 {new_count} 个新URL")
-        if updated_count > 0:
-            logger.info(f"网站 {site_id} 有 {updated_count} 个更新的URL")
-            
-        logger.info(f"网站 {site_id} 有 {len(updated_urls)} 个URL今天更新")
+        # 记录统计信息
+        logger.info(f"网站 {site_id} 统计: 新URL数量: {new_url_count}, 更新URL数量: {updated_url_count}, 总计: {len(updated_urls)}")
+        
         return updated_urls
     
-    def _batch_query_keywords(self, url_keywords_map: Dict[str, str], is_first_run: bool = False) -> Dict[str, Dict[str, Any]]:
-        """批量查询多个URL的关键词信息"""
-        results = {}
+    def _calculate_similarity(self, str1: str, str2: str) -> float:
+        """计算两个字符串的相似度，使用简单的Jaccard相似度
+        
+        Args:
+            str1: 第一个字符串
+            str2: 第二个字符串
+            
+        Returns:
+            相似度得分，范围0-1，1表示完全相同
+        """
+        # 转换为集合
+        set1 = set(str1.split())
+        set2 = set(str2.split())
+        
+        # 计算交集大小
+        intersection = len(set1.intersection(set2))
+        # 计算并集大小
+        union = len(set1.union(set2))
+        
+        # 如果并集为空，返回0
+        if union == 0:
+            return 0
+            
+        # 返回Jaccard相似度
+        return intersection / union
 
-        if is_first_run:
-            logger.info("首次运行，跳过关键词API查询")
-            return results
+    def _batch_query_keywords(self, keywords_list):
+        """批量查询关键词信息，每次最多查询5个关键词
+        :param keywords_list: 关键词列表
+        :return: 关键词查询结果字典
+        """
+        if not self.api_url or len(self.api_url) == 0:
+            logger.warning("未设置关键词API URL，将不会查询关键词信息")
+            return {}
 
-        if not self.api_url:
-            logger.warning("关键词API URL未设置，跳过关键词查询")
-            return results
-
-        valid_url_keywords = {url: keywords for url, keywords in url_keywords_map.items() if keywords.strip()}
-
-        if not valid_url_keywords:
-            logger.info("没有有效的关键词需要查询")
-            return results
-
-        logger.info(f"开始批量查询关键词，共有 {len(valid_url_keywords)} 个URL")
-
-        # 每批处理的关键词数量
-        batch_size = 5
-
-        # 将关键词分成多个批次处理
-        keywords_list = list(valid_url_keywords.values())
-        keyword_batches = [keywords_list[i:i+batch_size] for i in range(0, len(keywords_list), batch_size)]
-
-        for batch_index, keyword_batch in enumerate(keyword_batches):
-            combined_keywords = ",".join(keyword_batch)
-            logger.info(f"处理第 {batch_index+1}/{len(keyword_batches)} 批关键词，包含 {len(keyword_batch)} 个关键词")
-
+        # 对关键词列表进行去重，避免重复查询
+        unique_keywords = list(set(keywords_list))
+        logger.debug(f"关键词去重: 原始数量 {len(keywords_list)}, 去重后数量 {len(unique_keywords)}")
+        
+        keyword_data = {}
+        batch_size = 5  # 每批次最多5个关键词
+        
+        # 使用去重后的关键词列表进行查询
+        for i in range(0, len(unique_keywords), batch_size):
+            batch = unique_keywords[i:i + batch_size]
+            combined_keywords = ",".join(batch)
+            
             try:
                 api_url = f"{self.api_url}{combined_keywords}"
                 logger.debug(f"构造的API请求URL: {api_url}")
-
+                
                 response = requests.get(api_url, timeout=70)
 
                 if response.status_code == 200:
-                    batch_data = response.json()
-                    self._process_batch_results(batch_data, valid_url_keywords, results)
+                    try:
+                        batch_data = response.json()
+                        
+                        # 验证API返回格式
+                        if batch_data.get('status') == 'success' and 'data' in batch_data:
+                            # 将返回的数据添加到结果中
+                            for item in batch_data.get('data', []):
+                                keyword = item.get('keyword', '')
+                                if keyword:
+                                    # 标准化月份名称为大写，确保匹配一致性
+                                    if 'metrics' in item and 'monthly_searches' in item['metrics']:
+                                        for month_data in item['metrics']['monthly_searches']:
+                                            if 'month' in month_data:
+                                                month_data['month'] = month_data['month'].upper()
+                                    
+                                    # 记录关键词数据
+                                    if keyword in keyword_data:
+                                        # 如果关键词已存在，更新数据
+                                        keyword_data[keyword].update(item)
+                                    else:
+                                        keyword_data[keyword] = item
+                        else:
+                            logger.warning(f"API返回状态不是success或缺少data字段: {batch_data.get('status')}")
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text}")
+                    except Exception as e:
+                        logger.error(f"处理API响应时出错: {e}")
                 else:
                     logger.warning(f"API请求失败，状态码: {response.status_code}")
-                    logger.debug(f"响应内容: {response.text}")
-
-            except requests.exceptions.RequestException as req_err:
+            except requests.RequestException as req_err:
                 logger.error(f"请求异常: {req_err}")
             except json.JSONDecodeError as json_err:
                 logger.error(f"JSON解析错误: {json_err}, 响应内容: {response.text}")
 
             # 在每次请求之间随机等待3到7秒
-            wait_time = random.randint(3, 7)
-            logger.info(f"等待 {wait_time} 秒后进行下一次请求")
-            time.sleep(wait_time)
-
-        logger.info(f"关键词批量查询完成，共查询了 {len(valid_url_keywords)} 个URL的关键词")
-        return results
-    
-    def _process_batch_results(self, batch_data: Dict[str, Any], url_to_keyword: Dict[str, str], 
-                              results: Dict[str, Dict[str, Any]]) -> None:
-        """处理批量查询的结果
+            if i + batch_size < len(unique_keywords):
+                wait_time = random.uniform(3, 7)
+                logger.debug(f"等待 {wait_time:.2f} 秒后继续查询")
+                time.sleep(wait_time)
         
-        Args:
-            batch_data: API返回的批量查询结果
-            url_to_keyword: URL到关键词的映射
-            results: 存储处理结果的字典
-        """
-        if not batch_data or batch_data.get('status') != 'success':
-            logger.warning("API返回结果无效或状态不是success")
-            return
-            
-        # 处理每个URL的关键词结果
-        for url, original_keyword in url_to_keyword.items():
-            # 为该URL创建结果集合
-            if url not in results:
-                results[url] = {
-                    'status': 'success',
-                    'geo_target': batch_data.get('geo_target', '全球'),
-                    'total_results': 0,
-                    'data': []
-                }
-                
-            # 查找原始关键词和搜索量最大的关键词
-            original_keyword_data = None
-            max_search_keyword_data = None
-            max_search_volume = 0
-            
-            for keyword_data in batch_data.get('data', []):
-                keyword = keyword_data.get('keyword', '')
-                
-                # 检查是否是原始关键词
-                if keyword.lower() == original_keyword.lower():
-                    original_keyword_data = keyword_data
-                
-                # 检查是否是搜索量最大的关键词
-                search_volume = keyword_data.get('metrics', {}).get('avg_monthly_searches', 0)
-                if search_volume > max_search_volume:
-                    max_search_volume = search_volume
-                    max_search_keyword_data = keyword_data
-            
-            # 添加原始关键词数据（如果找到）
-            if original_keyword_data:
-                results[url]['data'].append(original_keyword_data)
-                
-            # 添加搜索量最大的关键词数据（如果不是原始关键词）
-            if max_search_keyword_data and max_search_keyword_data != original_keyword_data:
-                results[url]['data'].append(max_search_keyword_data)
-                
-            # 更新结果数量
-            results[url]['total_results'] = len(results[url]['data'])
-
+        return keyword_data
+    
     def send_telegram_notification(self, updates_by_site: Dict[str, List[str]]) -> bool:
         """发送Telegram通知"""
         # 检查是否有任何更新
@@ -698,7 +760,7 @@ class ContentWatcher:
                     url_keywords_map[url] = keywords
             
             # 批量查询关键词信息，传入首次运行标志
-            keyword_results = self._batch_query_keywords(url_keywords_map, is_first_run)
+            keyword_results = self._batch_query_keywords(list(url_keywords_map.values()))
             
             # 根据URL数量选择不同的显示模式
             if len(urls) <= 10:
@@ -877,17 +939,17 @@ class ContentWatcher:
                 if not keyword_data_list:
                     continue
                 
-                # 1.1 查找原始关键词的数据
+                # 1.1 查找原始关键词的数据 - 使用精确匹配
                 original_keyword_data = None
                 highest_volume_keyword_data = None
                 highest_volume = 0
                 
-                # 检查所有关键词数据的月度趋势
+                # 检查所有关键词数据
                 for kw_data in keyword_data_list:
                     keyword = kw_data.get('keyword', '')
                     search_volume = kw_data.get('metrics', {}).get('avg_monthly_searches', 0)
                     
-                    # 找到原始关键词
+                    # 精确匹配原始关键词 - 不区分大小写
                     if keyword.lower() == original_keyword.lower():
                         original_keyword_data = kw_data
                     
@@ -920,11 +982,11 @@ class ContentWatcher:
                             month_to_searches[month_key] = searches
                         
                         # 检查特定月份的趋势模式: 10月和11月为0，然后持续增长
-                        oct_searches = month_to_searches.get('2024/October', 0)
-                        nov_searches = month_to_searches.get('2024/November', 0)
-                        dec_searches = month_to_searches.get('2024/December', 0)
-                        jan_searches = month_to_searches.get('2025/January', 0)
-                        feb_searches = month_to_searches.get('2025/February', 0)
+                        oct_searches = month_to_searches.get('2024/OCTOBER', 0)
+                        nov_searches = month_to_searches.get('2024/NOVEMBER', 0)
+                        dec_searches = month_to_searches.get('2024/DECEMBER', 0)
+                        jan_searches = month_to_searches.get('2025/JANUARY', 0)
+                        feb_searches = month_to_searches.get('2025/FEBRUARY', 0)
                         
                         # 判断是否符合增长趋势条件
                         is_trending = (
@@ -946,8 +1008,9 @@ class ContentWatcher:
                 # 记录已处理的URL，避免重复
                 processed_urls.append(url)
                 
-                # 1.2 显示原始关键词的数据（如果找到）
+                # 1.2 显示原始关键词的数据
                 if original_keyword_data:
+                    # 使用原始关键词自己的数据
                     metrics = original_keyword_data.get('metrics', {})
                     avg_searches = metrics.get('avg_monthly_searches', 0)
                     
@@ -977,41 +1040,13 @@ class ContentWatcher:
                         # 添加月度趋势信息
                         if trend_parts:
                             message_parts.append(f"   📈 月度趋势: {', '.join(trend_parts)}")
-                # 1.3 如果没有找到原始关键词的数据但有其他数据，使用最高流量的关键词数据
-                elif highest_volume_keyword_data:
-                    keyword = highest_volume_keyword_data.get('keyword', '')
-                    metrics = highest_volume_keyword_data.get('metrics', {})
-                    avg_searches = metrics.get('avg_monthly_searches', 0)
-                    
-                    # 添加关键词信息（标注这不是原始关键词）
-                    message_parts.append(f"\n{len(processed_urls)}. <b>{original_keyword}</b> → {keyword} [{avg_searches}]")
-                    
-                    # 显示月度搜索趋势
-                    monthly_searches = metrics.get('monthly_searches', [])
-                    if monthly_searches:
-                        # 按时间顺序排序月度数据
-                        sorted_monthly_data = sorted(
-                            monthly_searches,
-                            key=lambda x: (x.get('year', ''), x.get('month', ''))
-                        )
-                        
-                        # 构建月度趋势数据
-                        trend_parts = []
-                        for month_info in sorted_monthly_data:
-                            year = month_info.get('year', '')
-                            month = month_info.get('month', '')
-                            searches = month_info.get('searches', 0)
-                            
-                            # 将月份名称转换为短格式
-                            month_short = month[:3].title() if month else ""
-                            trend_parts.append(f"{year}/{month_short}: {searches}")
-                        
-                        # 添加月度趋势信息
-                        if trend_parts:
-                            message_parts.append(f"   📈 月度趋势: {', '.join(trend_parts)}")
+                else:
+                    # 原始关键词在API结果中不存在，显示无数据提示
+                    message_parts.append(f"\n{len(processed_urls)}. <b>{original_keyword}</b> [无数据]")
             
-            # 1.4 显示全局最高流量的相关词（如果有）
-            if global_highest_volume_keyword:
+            # 1.3 单独显示全局最高流量的关键词（如果有）
+            # 确保它至少高于某个阈值（例如1000），避免显示无关紧要的低流量词
+            if global_highest_volume_keyword and global_highest_volume > 1000:
                 keyword = global_highest_volume_keyword.get('keyword', '')
                 metrics = global_highest_volume_keyword.get('metrics', {})
                 avg_searches = metrics.get('avg_monthly_searches', 0)
@@ -1313,21 +1348,27 @@ class ContentWatcher:
         """执行监控流程"""
         logger.info("开始执行内容监控...")
         
-        updates_by_site = {}
+        all_updates = {}
+        for i, website_url in enumerate(self.website_urls):
+            try:
+                # 处理每个网站
+                updated_urls = self.process_site(website_url, i)
+                
+                if updated_urls:
+                    site_id = self._get_site_identifier(website_url)
+                    all_updates[site_id] = updated_urls
+            except Exception as e:
+                logger.error(f"处理网站时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
         
-        # 处理每个网站
-        for index, site_url in enumerate(self.website_urls):
-            site_id = self._get_site_identifier(site_url)
-            updated_urls = self.process_site(site_url, index)
-            updates_by_site[site_id] = updated_urls
-        
-        # 发送通知
-        self.send_telegram_notification(updates_by_site)
-        
-        # 保存数据
-        self._save_data(self.previous_data)
-        
-        logger.info("内容监控完成")
+        if not all_updates:
+            logger.info("没有检测到内容更新")
+            return
+            
+        logger.info(f"监控完成，共有 {len(all_updates)} 个网站有更新")
+        total_updates = sum(len(urls) for urls in all_updates.values())
+        logger.info(f"总共 {total_updates} 个URL已更新")
 
     def _is_first_run(self) -> bool:
         """判断是否是首次运行
