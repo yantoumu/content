@@ -1,31 +1,41 @@
-# Python缓存文件
+# 排除特定文件
+1.md
+auto.sh
+content_watcher.py
+
+# 排除缓存和临时文件
 __pycache__/
 *.py[cod]
 *$py.class
-
-# 虚拟环境
-venv/
+*.so
+.Python
 env/
-ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# 日志文件
-*.log
-
-# 本地配置文件
-.env
-
-# IDE文件
+# 排除IDE文件
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# 操作系统文件
-.DS_Store
-Thumbs.db 
+# 排除日志和数据文件
+*.log
+data/
+debug_api.log
+output.log
 
-# 开发文档
-DEVELOPMENT.md
-
-# 排除特定文件
-tg.py 
+# 排除敏感信息
+.env
