@@ -23,20 +23,18 @@ def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description='网站内容更新监控工具')
     parser.add_argument('--test', action='store_true', help='在测试模式下运行')
-    parser.add_argument('--max-updates', type=int, default=50, help='首次运行时最多报告的更新数量')
+    parser.add_argument('--max-updates', type=int, default=0, help='首次运行时最多报告的更新数量，0表示不限制')
     return parser.parse_args()
 
 def main():
     """主函数"""
     args = parse_args()
-
     try:
         # 创建内容监控器
         watcher = ContentWatcher(
             test_mode=args.test,
             max_first_run_updates=args.max_updates
         )
-
         # 运行监控
         watcher.run()
 

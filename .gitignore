@@ -1,7 +1,9 @@
 # 排除特定文件
-1.md
-auto.sh
 content_watcher.py
+
+
+# 排除所有本地文件
+local_files/
 
 # 排除缓存和临时文件
 __pycache__/
@@ -39,3 +41,7 @@ output.log
 
 # 排除敏感信息
 .env
+
+# 排除文档文件（可能包含敏感信息）
+GitHub环境变量配置示例.md
+环境变量配置文档.md

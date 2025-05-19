@@ -33,8 +33,8 @@ class Config:
         # 是否在测试模式下运行
         self.test_mode = False
 
-        # 首次运行时最多报告的更新数量
-        self.max_first_run_updates = 50
+        # 首次运行时最多报告的更新数量 - 不限制数量
+        self.max_first_run_updates = 0  # 0表示不限制
 
         # 获取密钥
         self.encryption_key_str = os.environ.get('ENCRYPTION_KEY', '')
@@ -90,18 +90,14 @@ class Config:
         if not self.sitemap_api_enabled:
             logger.warning("未设置网站地图API URL或API Key，将不会发送更新到API")
         else:
-            # 不输出完整URL，避免敏感信息泄露
-            domain_part = self.sitemap_batch_api_url.split('/')[2] if '/' in self.sitemap_batch_api_url else '***'
-            logger.info(f"网站地图API已启用，批量提交到: {domain_part}")
+            logger.info("网站地图API已启用")
 
         # 验证关键词API URL
         if not self.keywords_api_url:
             logger.error("未设置关键词API URL")
             raise ValueError("KEYWORDS_API_URL是必需的配置项")
         else:
-            # 不输出完整URL，避免敏感信息泄露
-            domain_part = self.keywords_api_url.split('/')[2] if '/' in self.keywords_api_url else '***'
-            logger.info(f"关键词API已配置，域名: {domain_part}")
+            logger.info("关键词API已配置")
 
 # 创建全局配置实例
 config = Config()

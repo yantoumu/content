@@ -28,9 +28,7 @@ class SitemapAPI:
         if config.sitemap_batch_api_url:
             # 批量提交URL - 使用正确的批量提交路径
             self.batch_api_url = config.sitemap_batch_api_url
-            # 不输出完整URL，避免敏感信息泄露
-            domain_part = self.batch_api_url.split('/')[2] if '/' in self.batch_api_url else '***'
-            logger.info(f"批量提交API已配置，域名: {domain_part}")
+            logger.info("批量提交API已配置")
 
             # 检查并警告如果路径不正确
             if not self.batch_api_url.endswith('/api/v1/sitemap-updates/batch'):
@@ -306,12 +304,10 @@ class SitemapAPI:
         # 记录详细的批量提交信息
         logger.debug(f"批量提交详情: 数据项数量={len(updates_data)}")
         if updates_data:
+            # 只输出数据结构信息，不输出具体内容
             first_item = updates_data[0]
-            logger.debug(f"第一项数据的URL: {first_item.get('new_url', '')}, 关键词: {first_item.get('keywords', [])}")
             trends_data = first_item.get('keyword_trends_data', [])
-            logger.debug(f"第一项数据的趋势数据项数: {len(trends_data)}")
-            if trends_data:
-                logger.debug(f"第一项趋势数据的关键词: {trends_data[0].get('keyword', '')}")
+            logger.debug(f"第一项数据结构: 包含关键词数量={len(first_item.get('keywords', []))}, 趋势数据项数={len(trends_data)}")
         if not self.enabled:
             logger.debug("网站地图API未启用，跳过批量提交")
             return False
@@ -376,17 +372,16 @@ class SitemapAPI:
             else:
                 logger.info(f"重试批量提交 {len(updates_data)} 条数据{retry_suffix}")
 
-            # 输出批量提交URL
-            logger.debug(f"批量提交URL: {self.batch_api_url}")
-
             # 检查URL是否正确
             if not self.batch_api_url.endswith('/api/v1/sitemap-updates/batch'):
-                logger.warning(f"警告: 批量提交URL不正确，应该以/api/v1/sitemap-updates/batch结尾，当前值: {self.batch_api_url}")
+                logger.warning("警告: 批量提交URL路径不正确，应该以/api/v1/sitemap-updates/batch结尾")
                 # 尝试修正URL
                 if '/api/v1/sitemap-updates' in self.batch_api_url and not self.batch_api_url.endswith('/batch'):
                     self.batch_api_url = f"{self.batch_api_url}/batch"
-                    logger.info(f"已修正批量提交URL: {self.batch_api_url}")
-            logger.debug(f"批量提交请求头: {headers}")
+                    logger.info("已修正批量提交URL路径")
+            # 不输出完整请求头，避免敏感信息泄露
+            safe_headers = {k: '***' if k.lower() in ['x-api-key', 'authorization'] else v for k, v in headers.items()}
+            logger.debug(f"批量提交请求头: {safe_headers}")
 
             if self.use_gzip:
                 # 使用gzip压缩数据
@@ -497,7 +492,7 @@ class SitemapAPI:
                         "competition": "LOW",
                         "competition_index": "0",
                         "monthly_searches": [
-                            {"year": current_year, "month": current_month, "searches": 0}  # 使用'searches'而不是'count'
+                            {"year": str(current_year), "month": str(current_month), "searches": 0}  # 使用'searches'而不是'count'，year和month必须是字符串
                         ]
                     }
                 })
@@ -556,9 +551,9 @@ class SitemapAPI:
 
                     # 使用正确的字段名称，与目标API匹配
                     monthly_searches.append({
-                        "year": int(month_data.get('year', datetime.datetime.now().year)),
-                        "month": month_num,
-                        "searches": search_count  # 使用'searches'而不是'count'
+                        "year": str(month_data.get('year', datetime.datetime.now().year)),
+                        "month": str(month_num),
+                        "searches": search_count  # 使用'searches'而不是'count'，year和month必须是字符串
                     })
 
                 # 添加关键词数据

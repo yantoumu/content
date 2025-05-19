@@ -76,7 +76,9 @@ class KeywordExtractor:
             return keywords
 
         except Exception as e:
-            logger.error(f"提取关键词时出错: {e}, URL: {url}")
+            # 不输出完整URL，避免敏感信息泄露
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.error(f"提取关键词时出错: {e}, 域名: {domain_part}")
             return ""
 
     @staticmethod

@@ -125,7 +125,9 @@ class DataManager:
                                 previous_keywords_data[decrypted_url] = keywords_data
                             except Exception as e:
                                 logger.error(f"解密关键词数据时出错: {e}")
-                                logger.error(f"出错的URL: {decrypted_url}")
+                                # 不输出完整URL，避免敏感信息泄露
+                                domain_part = urlparse(decrypted_url).netloc if decrypted_url else '***'
+                                logger.error(f"出错的域名: {domain_part}")
 
         return previous_urls, previous_keywords_data
 

@@ -29,7 +29,7 @@ class SitemapParser:
         sitemap_data = {}
 
         try:
-            logger.info(f"正在下载网站地图: {site_id}")
+            logger.info("正在下载网站地图")
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
 
@@ -82,10 +82,15 @@ class SitemapParser:
             return {}
         except ET.ParseError as e:
             logger.error(f"解析XML时出错: {e}")
-            logger.error(f"出错的URL: {url}")
+            # 不输出完整URL，避免敏感信息泄露
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.error(f"出错的域名: {domain_part}")
             return {}
         except Exception as e:
             logger.error(f"处理网站地图时出现未知错误: {e}")
+            # 不输出完整URL，避免敏感信息泄露
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.error(f"出错的域名: {domain_part}")
             return {}
 
     @staticmethod
