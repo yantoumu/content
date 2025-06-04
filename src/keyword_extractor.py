@@ -7,20 +7,152 @@
 
 import logging
 import re
+from typing import Callable, List, Dict, Any
 from urllib.parse import urlparse
 
 # 配置日志
 logger = logging.getLogger('content_watcher.keyword_extractor')
+
+class URLFilter:
+    """URL过滤器，用于确定URL是否应被排除处理"""
+    
+    def __init__(self):
+        """初始化过滤器并注册所有过滤规则"""
+        # 过滤规则字典，包含名称和对应的过滤函数
+        # 每个过滤函数接收ParseResult对象，如果URL应被排除则返回True
+        self.filters: Dict[str, Callable] = {
+            # 域名过滤规则
+            "domain_games_suffix": self._filter_domain_games_suffix,
+            
+            # 路径过滤规则
+            "path_tag": self._filter_path_tag,
+            
+            # 网站地图过滤规则
+            "sitemap_xml_extension": self._filter_sitemap_xml_extension,
+            "sitemap_path_keyword": self._filter_sitemap_path_keyword,
+            "sitemap_filename_keyword": self._filter_sitemap_filename_keyword,
+        }
+    
+    def should_exclude(self, parsed_url) -> bool:
+        """检查URL是否应该被排除
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果URL应该被排除，返回True；否则返回False
+        """
+        # 遍历所有过滤规则
+        for filter_name, filter_func in self.filters.items():
+            try:
+                if filter_func(parsed_url):
+                    # 调试日志，记录匹配的过滤规则
+                    if logger.isEnabledFor(logging.DEBUG):
+                        domain = parsed_url.netloc
+                        logger.debug(f"URL被过滤规则'{filter_name}'排除: {domain}")
+                    return True
+            except Exception as e:
+                # 过滤规则执行出错，记录日志但不中断处理
+                logger.error(f"执行过滤规则'{filter_name}'时出错: {e}")
+        
+        # 所有过滤规则都通过，URL不应被排除
+        return False
+    
+    # ===== 域名过滤规则 =====
+    
+    def _filter_domain_games_suffix(self, parsed_url) -> bool:
+        """过滤.games后缀的域名
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果域名以.games结尾，返回True；否则返回False
+        """
+        return parsed_url.netloc.endswith('.games')
+    
+    # ===== 路径过滤规则 =====
+    
+    def _filter_path_tag(self, parsed_url) -> bool:
+        """过滤包含/tag/的路径
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果路径包含/tag/，返回True；否则返回False
+        """
+        return '/tag/' in parsed_url.path
+    
+    # ===== 网站地图过滤规则 =====
+    
+    def _filter_sitemap_xml_extension(self, parsed_url) -> bool:
+        """过滤XML格式的网站地图
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果路径以.xml或.xml.gz结尾，返回True；否则返回False
+        """
+        path = parsed_url.path.lower()
+        return path.endswith('.xml') or path.endswith('.xml.gz')
+    
+    def _filter_sitemap_path_keyword(self, parsed_url) -> bool:
+        """过滤路径中包含sitemap关键词的URL
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果路径中含有sitemap关键词，返回True；否则返回False
+        """
+        path = parsed_url.path.lower()
+        return '/sitemap' in path or 'sitemap.' in path or '/sitemaps/' in path
+    
+    def _filter_sitemap_filename_keyword(self, parsed_url) -> bool:
+        """过滤文件名包含sitemap关键词的URL
+        
+        Args:
+            parsed_url: 解析后的URL对象
+            
+        Returns:
+            如果文件名包含sitemap关键词，返回True；否则返回False
+        """
+        path_parts = parsed_url.path.strip('/').split('/')
+        if not path_parts:
+            return False
+            
+        filename = path_parts[-1].lower()
+        return ('sitemap' in filename or 
+                filename.startswith('sm-') or 
+                (len(path_parts) > 1 and 'sitemap' in ''.join(path_parts[-2:])))
+
+    # ===== 注册新的过滤规则 =====
+    
+    def register_filter(self, name: str, filter_func: Callable) -> None:
+        """注册新的过滤规则
+        
+        Args:
+            name: 过滤规则名称
+            filter_func: 过滤函数，接收ParseResult对象，返回布尔值
+        """
+        if name in self.filters:
+            logger.warning(f"过滤规则'{name}'已存在，将被覆盖")
+        
+        self.filters[name] = filter_func
+        logger.info(f"已注册新的过滤规则: {name}")
+
 
 class KeywordExtractor:
     """从URL中提取关键词"""
 
     def __init__(self):
         """初始化提取器"""
-        pass
+        # 创建URL过滤器
+        self.url_filter = URLFilter()
 
-    @staticmethod
-    def extract_keywords_from_url(url: str) -> str:
+    def extract_keywords_from_url(self, url: str) -> str:
         """从URL中提取关键词
 
         Args:
@@ -33,6 +165,10 @@ class KeywordExtractor:
             # 解析URL获取路径
             parsed_url = urlparse(url)
             path_parts = parsed_url.path.strip('/').split('/')
+            
+            # 预处理：检查URL是否应该被排除
+            if self.url_filter.should_exclude(parsed_url):
+                return ""
 
             # 如果路径为空则返回空字符串
             if not path_parts:
@@ -48,9 +184,19 @@ class KeywordExtractor:
                 # logger.debug(f"URL路径以.games结尾，跳过关键词提取: {url}")
                 return ""
 
-            # 2. 检查网站特定结构
+            # 2.a 新规则: 匹配 /game/[id]/[name].html 格式
+            if len(path_parts) >= 3 and path_parts[0] == "game" and path_parts[1].isdigit():
+                # 移除文件扩展名
+                base_name = path_parts[2]
+                if "." in base_name:
+                    base_name = base_name.split('.')[0]  # 移除扩展名
+                keywords = base_name.replace('-', ' ')
+                # logger.debug(f"从带ID的游戏URL提取关键词: {keywords}")
+                return keywords
+
+            # 2.b 检查网站特定结构
             # 例如: /game/territory-war 中，提取 territory-war 作为关键词
-            if len(path_parts) >= 2 and path_parts[-2] == "game":
+            elif len(path_parts) >= 2 and path_parts[-2] == "game":
                 keywords = path_parts[-1].replace('-', ' ')
                 # logger.debug(f"从游戏URL提取关键词: {keywords}")
                 return keywords
@@ -64,6 +210,10 @@ class KeywordExtractor:
                     return ""
                 # 否则使用倒数第二部分
                 last_part = path_parts[-2]
+            
+            # 移除文件扩展名
+            if "." in last_part:
+                last_part = last_part.split('.')[0]  # 移除扩展名
 
             # 将连字符替换为空格
             keywords = last_part.replace('-', ' ')
@@ -77,7 +227,7 @@ class KeywordExtractor:
 
         except Exception as e:
             # 不输出完整URL，避免敏感信息泄露
-            domain_part = urlparse(url).netloc if url else '***'
+            domain_part = parsed_url.netloc if url else '***'
             logger.error(f"提取关键词时出错: {e}, 域名: {domain_part}")
             return ""
 
