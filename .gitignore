@@ -1,6 +1,9 @@
 # 排除特定文件
 content_watcher.py
 
+# 排除测试文件
+test_*.py
+debug_*.py
 
 # 排除所有本地文件
 local_files/
