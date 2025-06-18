@@ -84,9 +84,11 @@ class Config:
 
         # 移除 Telegram 相关配置
 
-        # 关键词API配置 - 支持多个API地址
+        # 关键词API配置 - 统一使用KEYWORDS_API_URLS支持多个API地址
         keywords_api_urls_str = os.environ.get('KEYWORDS_API_URLS', '')
+        
         if keywords_api_urls_str:
+            # 优先使用KEYWORDS_API_URLS（多API配置）
             try:
                 parsed_urls = json.loads(keywords_api_urls_str)
                 if not isinstance(parsed_urls, list):
@@ -94,13 +96,19 @@ class Config:
                     self.keywords_api_urls = []
                 else:
                     self.keywords_api_urls = parsed_urls
+                    logger.info(f"使用KEYWORDS_API_URLS配置，共 {len(parsed_urls)} 个API地址")
             except (json.JSONDecodeError, TypeError) as e:
                 logger.error(f"KEYWORDS_API_URLS JSON解析失败: {e}")
                 self.keywords_api_urls = []
         else:
-            # 向后兼容单API配置
+            # 向后兼容：如果没有KEYWORDS_API_URLS，检查KEYWORDS_API_URL
             single_url = os.environ.get('KEYWORDS_API_URL', '')
-            self.keywords_api_urls = [single_url] if single_url else []
+            if single_url:
+                self.keywords_api_urls = [single_url]
+                logger.warning("检测到KEYWORDS_API_URL配置，建议升级为KEYWORDS_API_URLS以启用多API并发")
+                logger.info(f"向后兼容模式：将单API转换为数组格式")
+            else:
+                self.keywords_api_urls = []
 
         # 网站地图更新API相关配置
         raw_api_url = os.environ.get('SITEMAP_API_URL', '')

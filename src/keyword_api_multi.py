@@ -70,17 +70,27 @@ class MultiAPIKeywordManager:
                 self.logger.error("没有配置可用的关键词API地址")
                 return self._create_default_keyword_data(keywords_list)
             
-            # 如果只有一个API或没有配置多API，使用原有方法
+            # 根据API数量决定使用单API还是多API模式
             if len(config.keywords_api_urls) <= 1:
-                api_url = config.keywords_api_urls[0]
-                api = KeywordAPI(api_url)
-                return api.batch_query_keywords(keywords_list, max_retries)
+                if len(config.keywords_api_urls) == 1:
+                    api_url = config.keywords_api_urls[0]
+                    self.logger.info(f"使用单API模式: {api_url}")
+                    api = KeywordAPI(api_url)
+                    return api.batch_query_keywords(keywords_list, max_retries)
+                else:
+                    self.logger.error("没有配置任何关键词API地址")
+                    return self._create_default_keyword_data(keywords_list)
+            
+            # 多API模式：根据关键词数量选择处理策略
+            self.logger.info(f"使用多API并发模式: {len(config.keywords_api_urls)} 个API地址")
             
             # 大批量处理使用智能队列调度
             if len(keywords_list) > 100:
+                self.logger.info(f"大批量处理模式: {len(keywords_list)} 个关键词，使用队列调度")
                 return self._batch_query_with_queue_scheduler(keywords_list, max_retries)
             
-            # 小批量处理使用原有并发方法
+            # 小批量处理使用直接并发方法
+            self.logger.info(f"小批量处理模式: {len(keywords_list)} 个关键词，使用直接并发")
             return self._batch_query_direct_parallel(keywords_list, max_retries)
             
         except Exception as e:
