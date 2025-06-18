@@ -187,7 +187,8 @@ class SitemapParser:
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1'
+            'Sec-Fetch-User': '?1',
+            'Priority': 'u=0, i'
         })
         
         # 创建压缩检测器

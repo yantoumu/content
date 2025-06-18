@@ -35,7 +35,7 @@ jobs:
         env:
           WEBSITE_URLS: ${{ secrets.WEBSITE_URLS }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          KEYWORDS_API_URL: ${{ secrets.KEYWORDS_API_URL }}
+          KEYWORDS_API_URLS: ${{ secrets.KEYWORDS_API_URLS }}
           SITEMAP_API_URL: ${{ secrets.SITEMAP_API_URL }}
           SITEMAP_API_KEY: ${{ secrets.SITEMAP_API_KEY }}
           LOGLEVEL: "INFO"
