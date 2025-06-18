@@ -25,6 +25,49 @@ logging.getLogger('content_watcher.core').setLevel(logging.INFO)
 
 logger = logging.getLogger('content_watcher.config')
 
+
+class ConfigValidator:
+    """配置验证器 - 符合单一职责原则"""
+    
+    @staticmethod
+    def validate_website_urls(urls: list) -> None:
+        """验证网站URL列表"""
+        if not urls:
+            logger.error("未提供网站URL列表")
+            raise ValueError("WEBSITE_URLS必须是有效的JSON数组")
+    
+    @staticmethod
+    def validate_and_filter_api_urls(urls: list) -> list:
+        """验证并过滤API URL列表"""
+        if not urls or not any(urls):
+            logger.error("未设置关键词API URL")
+            raise ValueError("KEYWORDS_API_URL或KEYWORDS_API_URLS是必需的配置项")
+        
+        # 过滤和验证URL
+        valid_urls = []
+        seen_urls = set()
+        for url in urls:
+            if not url or not url.strip():
+                continue
+            url = url.strip()
+            # 基础URL格式验证
+            if not (url.startswith('http://') or url.startswith('https://')):
+                logger.warning(f"跳过无效URL格式: {url}")
+                continue
+            # 去重
+            if url in seen_urls:
+                logger.warning(f"跳过重复URL: {url}")
+                continue
+            seen_urls.add(url)
+            valid_urls.append(url)
+        
+        if not valid_urls:
+            logger.error("没有有效的关键词API URL")
+            raise ValueError("所有KEYWORDS_API_URL都无效")
+        
+        return valid_urls
+
+
 class Config:
     """配置管理类，处理环境变量和配置验证"""
 
@@ -41,8 +84,23 @@ class Config:
 
         # 移除 Telegram 相关配置
 
-        # 关键词API配置
-        self.keywords_api_url = os.environ.get('KEYWORDS_API_URL', '')
+        # 关键词API配置 - 支持多个API地址
+        keywords_api_urls_str = os.environ.get('KEYWORDS_API_URLS', '')
+        if keywords_api_urls_str:
+            try:
+                parsed_urls = json.loads(keywords_api_urls_str)
+                if not isinstance(parsed_urls, list):
+                    logger.error("KEYWORDS_API_URLS必须是JSON数组格式")
+                    self.keywords_api_urls = []
+                else:
+                    self.keywords_api_urls = parsed_urls
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.error(f"KEYWORDS_API_URLS JSON解析失败: {e}")
+                self.keywords_api_urls = []
+        else:
+            # 向后兼容单API配置
+            single_url = os.environ.get('KEYWORDS_API_URL', '')
+            self.keywords_api_urls = [single_url] if single_url else []
 
         # 网站地图更新API相关配置
         raw_api_url = os.environ.get('SITEMAP_API_URL', '')
@@ -78,12 +136,8 @@ class Config:
 
     def validate_config(self) -> None:
         """验证配置是否有效"""
-        # 验证网站URL列表
-        if not self.website_urls:
-            logger.error("未提供网站URL列表")
-            raise ValueError("WEBSITE_URLS必须是有效的JSON数组")
-
-        # 移除 Telegram 配置验证
+        # 使用验证器验证网站URL列表
+        ConfigValidator.validate_website_urls(self.website_urls)
 
         # 检查网站地图API配置 - 只使用批量提交
         self.sitemap_api_enabled = bool(self.sitemap_batch_api_url and self.sitemap_api_key)
@@ -92,12 +146,9 @@ class Config:
         else:
             logger.info("网站地图API已启用")
 
-        # 验证关键词API URL
-        if not self.keywords_api_url:
-            logger.error("未设置关键词API URL")
-            raise ValueError("KEYWORDS_API_URL是必需的配置项")
-        else:
-            logger.info("关键词API已配置")
+        # 使用验证器验证关键词API URLs
+        self.keywords_api_urls = ConfigValidator.validate_and_filter_api_urls(self.keywords_api_urls)
+        logger.info(f"关键词API已配置，共 {len(self.keywords_api_urls)} 个有效API地址")
 
 # 创建全局配置实例
 config = Config()

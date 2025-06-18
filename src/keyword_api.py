@@ -29,11 +29,11 @@ class KeywordAPI:
         """初始化API交互器
 
         Args:
-            api_url: API基础URL，如果为None则从配置中获取
+            api_url: API基础URL，如果为None则从配置中获取第一个
             headers: 请求头，默认为None
             timeout: 请求超时时间，默认为80秒
         """
-        self.api_url = api_url or config.keywords_api_url
+        self.api_url = api_url or (config.keywords_api_urls[0] if config.keywords_api_urls else '')
         self.headers = headers or {}
         # 添加gzip压缩头
         if 'Accept-Encoding' not in self.headers:
@@ -48,7 +48,6 @@ class KeywordAPI:
 
     def get_keyword_data(self, keywords: Union[str, List[str]], max_retries: int = 2) -> Dict[str, Any]:
         """获取关键词数据
-
         Args:
             keywords: 关键词字符串或列表
             max_retries: 最大重试次数
