@@ -170,6 +170,18 @@ class SitemapParser:
         """初始化解析器"""
         # 创建会话对象用于复用连接
         self.session = requests.Session()
+        
+        # 设置标准浏览器请求头，避免403错误
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        })
+        
         # 创建压缩检测器
         self.compression_detector = CompressionDetector()
 
@@ -179,7 +191,13 @@ class SitemapParser:
 
         try:
             logger.info("正在下载网站地图")
-            response = self.session.get(url, timeout=30)
+            
+            # 动态添加Referer头部，使用网站首页作为来源（关键修复）
+            parsed_url = urlparse(url)
+            referer_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+            headers = {'Referer': referer_url}
+            
+            response = self.session.get(url, headers=headers, timeout=30)
             response.raise_for_status()
 
             # 获取响应内容和头信息
@@ -214,6 +232,9 @@ class SitemapParser:
 
         except requests.RequestException as e:
             logger.error(f"下载网站地图时出错: {e}")
+            # 不输出完整URL，避免敏感信息泄露
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.error(f"出错的域名: {domain_part}")
             return {}
         except ET.ParseError as e:
             logger.error(f"解析XML时出错: {e}")
