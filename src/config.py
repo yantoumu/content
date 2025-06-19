@@ -138,7 +138,26 @@ class Config:
         # 新增关键词指标批量接口配置
         metrics_api_url = os.environ.get('KEYWORD_METRICS_API_URL', '')
         # 与旧 sitemap_api_key 复用同一 API Key
-        self.metrics_batch_api_url = metrics_api_url.strip() if metrics_api_url else ''
+        # 确保使用正确的API URL - 自动拼接批量API路径
+        if metrics_api_url:
+            # 解析基础URL部分（协议和域名）
+            import re
+            base_url_match = re.match(r'(https?://[^/]+).*', metrics_api_url)
+            if base_url_match:
+                base_url = base_url_match.group(1)
+                # 使用正确的API路径 - 批量关键词指标API
+                self.metrics_batch_api_url = f"{base_url}/api/v1/keyword-metrics/batch"
+            else:
+                # 如果无法解析，尝试构造批量提交URL
+                if metrics_api_url.endswith('/api/v1/keyword-metrics'):
+                    self.metrics_batch_api_url = f"{metrics_api_url}/batch"
+                elif metrics_api_url.endswith('/api/v1/keyword-metrics/batch'):
+                    # 已经是完整路径，直接使用
+                    self.metrics_batch_api_url = metrics_api_url
+                else:
+                    self.metrics_batch_api_url = f"{metrics_api_url}/api/v1/keyword-metrics/batch"
+        else:
+            self.metrics_batch_api_url = ''
 
         # 启用标志：同时存在 URL 与 API Key 即视为启用
         self.metrics_api_enabled = bool(self.metrics_batch_api_url and self.sitemap_api_key)
