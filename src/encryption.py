@@ -23,7 +23,7 @@ class Encryptor:
 
     def __init__(self):
         """初始化加密器"""
-        self.encryption_key = Encryptor._process_encryption_key(config.encryption_key_str)
+        self.encryption_key = Encryptor._process_encryption_key(config.encryption_key)
 
         # 验证密钥长度
         if not self.encryption_key or len(self.encryption_key) != 32:
@@ -32,7 +32,7 @@ class Encryptor:
 
     @staticmethod
     def _process_encryption_key(key: str) -> bytes:
-        """处理加密密钥，支持多种格式"""
+        """处理加密密钥，支持多种格式，确保输出32字节"""
         if not key:
             return b''
 
@@ -45,14 +45,20 @@ class Encryptor:
 
         # 尝试将密钥当作Base64编码处理
         try:
-            decoded = base64.b64decode(key)
-            if len(decoded) == 32:  # 期望32字节的密钥
-                return decoded
+            decoded = base64.b64decode(key + '==')  # 添加padding以防格式问题
+            if len(decoded) >= 32:  # 如果长度足够，截取前32字节
+                return decoded[:32]
+            elif len(decoded) < 32:  # 如果长度不足，用零填充
+                return decoded + b'\x00' * (32 - len(decoded))
         except (binascii.Error, TypeError, ValueError):
             pass
 
-        # 如果上述方法都失败，直接编码字符串
-        return key.encode('utf-8')
+        # 如果上述方法都失败，处理字符串密钥
+        key_bytes = key.encode('utf-8')
+        if len(key_bytes) >= 32:
+            return key_bytes[:32]  # 截取前32字节
+        else:
+            return key_bytes + b'\x00' * (32 - len(key_bytes))  # 用零填充到32字节
 
     def _encrypt_bytes(self, data: bytes) -> bytes:
         """加密二进制数据的内部方法
