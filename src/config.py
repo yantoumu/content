@@ -1,139 +1,108 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-配置管理模块
-处理环境变量和配置验证
+配置模块
+管理应用程序的所有配置项
 """
 
+import os
 import json
 import logging
-import os
+from typing import List
 
-# 配置日志 - 将默认级别设置为WARNING，只输出警告和错误
-logging.basicConfig(
-    level=logging.WARNING,  # 只输出警告和错误
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# 设置第三方库的日志级别，减少日志输出
-# 将urllib3的日志级别设置为WARNING，只显示警告和错误
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-
-# 为关键模块设置日志级别
-# 允许核心模块输出信息级别的日志
-logging.getLogger('content_watcher.core').setLevel(logging.INFO)
-
+# 配置日志
 logger = logging.getLogger('content_watcher.config')
 
 
 class ConfigValidator:
-    """配置验证器 - 符合单一职责原则"""
-    
+    """配置验证器 - 单一职责：验证配置"""
+
     @staticmethod
-    def validate_website_urls(urls: list) -> None:
+    def validate_website_urls(urls: List[str]) -> None:
         """验证网站URL列表"""
         if not urls:
-            logger.error("未提供网站URL列表")
-            raise ValueError("WEBSITE_URLS必须是有效的JSON数组")
-    
-    @staticmethod
-    def validate_and_filter_api_urls(urls: list) -> list:
-        """验证并过滤API URL列表"""
-        if not urls or not any(urls):
-            logger.error("未设置关键词API URL")
-            raise ValueError("KEYWORDS_API_URL或KEYWORDS_API_URLS是必需的配置项")
-        
-        # 过滤和验证URL
+            logger.warning("未配置网站URL列表，将无法执行监控")
+            return
+
         valid_urls = []
-        seen_urls = set()
         for url in urls:
-            if not url or not url.strip():
-                continue
             url = url.strip()
-            # 基础URL格式验证
-            if not (url.startswith('http://') or url.startswith('https://')):
-                logger.warning(f"跳过无效URL格式: {url}")
-                continue
-            # 去重
-            if url in seen_urls:
-                logger.warning(f"跳过重复URL: {url}")
-                continue
-            seen_urls.add(url)
-            valid_urls.append(url)
-        
+            if url:
+                if not url.startswith(('http://', 'https://')):
+                    url = f'https://{url}'
+                valid_urls.append(url)
+
         if not valid_urls:
-            logger.error("没有有效的关键词API URL")
-            raise ValueError("所有KEYWORDS_API_URL都无效")
-        
+            logger.warning("没有有效的网站URL")
+        else:
+            logger.info(f"已配置 {len(valid_urls)} 个有效网站URL")
+
+    @staticmethod
+    def validate_and_filter_api_urls(urls: List[str]) -> List[str]:
+        """验证并过滤API URL列表"""
+        if not urls:
+            logger.warning("未配置关键词API URL列表")
+            return []
+
+        valid_urls = []
+        for url in urls:
+            url = url.strip()
+            if url and url.startswith(('http://', 'https://')):
+                valid_urls.append(url)
+            elif url:
+                logger.warning(f"跳过无效的API URL: {url}")
+
         return valid_urls
+
+    @staticmethod
+    def validate_batch_size(batch_size: int) -> int:
+        """验证批处理大小配置"""
+        if batch_size < 1:
+            logger.warning(f"批处理大小不能小于1，已重置为1")
+            return 1
+        elif batch_size > 10:
+            logger.warning(f"批处理大小过大({batch_size})，已重置为10")
+            return 10
+        return batch_size
 
 
 class Config:
-    """配置管理类，处理环境变量和配置验证"""
+    """应用程序配置类 - 单一职责：管理配置"""
 
     def __init__(self):
         """初始化配置"""
-        # 是否在测试模式下运行
-        self.test_mode = False
+        # 基础配置
+        self.debug = os.environ.get('DEBUG', 'false').lower() == 'true'
 
-        # 首次运行时最多报告的更新数量 - 不限制数量
-        self.max_first_run_updates = 0  # 0表示不限制
+        # 数据存储配置
+        self.data_file = os.environ.get('DATA_FILE', 'data/sites_data.json')
 
-        # 获取密钥
-        self.encryption_key_str = os.environ.get('ENCRYPTION_KEY', '')
+        # 加密配置
+        self.encryption_key = os.environ.get('ENCRYPTION_KEY', '')
 
-        # 移除 Telegram 相关配置
+        # 网站监控配置
+        self.max_concurrent = int(os.environ.get('MAX_CONCURRENT', '3'))
 
-        # 关键词API配置 - 统一使用KEYWORDS_API_URLS支持多个API地址
-        keywords_api_urls_str = os.environ.get('KEYWORDS_API_URLS', '')
-        
-        if keywords_api_urls_str:
-            # 优先使用KEYWORDS_API_URLS（多API配置）
-            try:
-                parsed_urls = json.loads(keywords_api_urls_str)
-                if not isinstance(parsed_urls, list):
-                    logger.error("KEYWORDS_API_URLS必须是JSON数组格式")
-                    self.keywords_api_urls = []
-                else:
-                    self.keywords_api_urls = parsed_urls
-                    logger.info(f"使用KEYWORDS_API_URLS配置，共 {len(parsed_urls)} 个API地址")
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.error(f"KEYWORDS_API_URLS JSON解析失败: {e}")
-                self.keywords_api_urls = []
-        else:
-            # 向后兼容：如果没有KEYWORDS_API_URLS，检查KEYWORDS_API_URL
-            single_url = os.environ.get('KEYWORDS_API_URL', '')
-            if single_url:
-                self.keywords_api_urls = [single_url]
-                logger.warning("检测到KEYWORDS_API_URL配置，建议升级为KEYWORDS_API_URLS以启用多API并发")
-                logger.info(f"向后兼容模式：将单API转换为数组格式")
-            else:
-                self.keywords_api_urls = []
+        # 关键词批处理配置 - 新增
+        raw_batch_size = int(os.environ.get('KEYWORDS_BATCH_SIZE', '4'))
+        self.keywords_batch_size = ConfigValidator.validate_batch_size(raw_batch_size)
+        if raw_batch_size != self.keywords_batch_size:
+            logger.info(f"关键词批处理大小已调整: {raw_batch_size} → {self.keywords_batch_size}")
 
-        # 网站地图更新API相关配置
-        raw_api_url = os.environ.get('SITEMAP_API_URL', '')
-        # 确保使用正确的API URL
-        if raw_api_url:
-            # 解析基础URL部分（协议和域名）
-            import re
-            base_url_match = re.match(r'(https?://[^/]+).*', raw_api_url)
-            if base_url_match:
-                base_url = base_url_match.group(1)
-                # 使用正确的API路径 - 只使用批量提交
-                self.sitemap_batch_api_url = f"{base_url}/api/v1/sitemap-updates/batch"  # 批量提交的API
-            else:
-                # 如果无法解析，尝试构造批量提交URL
-                if raw_api_url.endswith('/api/v1/sitemap-update'):
-                    self.sitemap_batch_api_url = raw_api_url.replace('/api/v1/sitemap-update', '/api/v1/sitemap-updates/batch')
-                elif raw_api_url.endswith('/api/v1/sitemap-updates'):
-                    self.sitemap_batch_api_url = f"{raw_api_url}/batch"
-                else:
-                    self.sitemap_batch_api_url = f"{raw_api_url}/api/v1/sitemap-updates/batch"
-        else:
-            self.sitemap_batch_api_url = ''
+        # 关键词API配置
+        keywords_urls_json = os.environ.get('KEYWORDS_API_URLS', '[]')
+        try:
+            self.keywords_api_urls = json.loads(keywords_urls_json)
+        except json.JSONDecodeError:
+            logger.warning("KEYWORDS_API_URLS格式无效，使用空列表")
+            self.keywords_api_urls = []
 
+        # 配置超时设置
+        self.keyword_query_timeout = int(os.environ.get('KEYWORD_QUERY_TIMEOUT', '30'))  # 关键词查询超时(秒)
+        self.site_request_timeout = int(os.environ.get('SITE_REQUEST_TIMEOUT', '20'))  # 网站请求超时(秒)
+
+        # API密钥配置 - 继续使用SITEMAP_API_KEY作为通用API密钥
         self.sitemap_api_key = os.environ.get('SITEMAP_API_KEY', '')
-        self.sitemap_api_enabled = False
 
         # 新增关键词指标批量接口配置
         metrics_api_url = os.environ.get('KEYWORD_METRICS_API_URL', '')
@@ -179,12 +148,11 @@ class Config:
         # 使用验证器验证网站URL列表
         ConfigValidator.validate_website_urls(self.website_urls)
 
-        # 旧版 sitemap API 已弃用
-        self.sitemap_api_enabled = False
-
         # 使用验证器验证关键词API URLs
         self.keywords_api_urls = ConfigValidator.validate_and_filter_api_urls(self.keywords_api_urls)
         logger.info(f"关键词API已配置，共 {len(self.keywords_api_urls)} 个有效API地址")
+        logger.info(f"关键词批处理大小: {self.keywords_batch_size}")
+
 
 # 创建全局配置实例
 config = Config()

@@ -10,6 +10,7 @@ local_files/
 
 # 排除缓存和临时文件
 __pycache__/
+CONFIGURATION.md
 *.py[cod]
 *$py.class
 *.so

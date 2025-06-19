@@ -95,7 +95,12 @@ class KeywordAPI:
         self.logger.debug(f"关键词去重: 原始数量 {len(keywords_list)}, 去重后数量 {len(unique_keywords)}")
 
         keyword_data = {}
-        batch_size = 8  # 增加批处理大小以提高效率
+        # 使用配置中的批处理大小，而不是硬编码
+        batch_size = config.keywords_batch_size
+        
+        # 记录批处理配置信息（仅调试级别）
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"使用批处理大小: {batch_size}")
 
         # 使用队列来管理关键词批次，便于失败重试
         keyword_queue = deque()
@@ -106,6 +111,10 @@ class KeywordAPI:
             batch = unique_kw_list[i:i + batch_size]
             keyword_queue.append(batch)
 
+        # 记录批次信息（仅调试级别）
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"创建 {len(keyword_queue)} 个批次，每批最多 {batch_size} 个关键词")
+
         # 记录失败的关键词批次，用于最终报告
         failed_batches = []
 
@@ -113,6 +122,10 @@ class KeywordAPI:
         while keyword_queue:
             batch = keyword_queue.popleft()
             combined_keywords = ",".join(batch)
+
+            # 验证批次大小是否符合配置
+            if len(batch) > config.keywords_batch_size:
+                self.logger.warning(f"批次大小({len(batch)})超过配置限制({config.keywords_batch_size})")
 
             # 获取批次数据
             batch_result = self.get_keyword_data(combined_keywords, max_retries)
@@ -192,7 +205,12 @@ class KeywordAPI:
             try:
                 # 构建请求URL
                 request_url = f"{self.api_url}{keywords}"
-                self.logger.debug(f"请求关键词API，关键词数量: {len(keywords.split(','))}")
+                keyword_count = len(keywords.split(','))
+                self.logger.debug(f"请求关键词API，关键词数量: {keyword_count}")
+                
+                # 验证关键词数量是否超出配置限制
+                if keyword_count > config.keywords_batch_size:
+                    self.logger.warning(f"单次请求关键词数量({keyword_count})超出配置限制({config.keywords_batch_size})")
 
                 # 使用session发送请求，复用连接
                 response = self.session.get(
@@ -292,17 +310,18 @@ class KeywordAPI:
         return result
 
     def close(self):
-        """关闭会话连接
-
-        在不再需要使用API交互器时调用此方法
-        """
-        if hasattr(self, 'session') and self.session:
-            self.logger.debug("关闭API交互器会话")
-            self.session.close()
+        """关闭会话"""
+        try:
+            if hasattr(self, 'session') and self.session:
+                self.session.close()
+                self.logger.debug("关闭关键词API会话")
+        except Exception as e:
+            self.logger.warning(f"关闭关键词API会话时出错: {e}")
 
     def __del__(self):
-        """析构函数，确保在对象被垃圾回收时关闭会话"""
+        """析构函数，确保会话被关闭"""
         self.close()
 
-# 创建API实例
+
+# 创建全局API交互器实例
 keyword_api = KeywordAPI()

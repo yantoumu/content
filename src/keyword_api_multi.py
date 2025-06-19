@@ -23,12 +23,21 @@ logger = logging.getLogger('content_watcher.keyword_api_multi')
 class APISchedulerConfig:
     """API调度器配置类 - 符合单一职责原则"""
     
-    def __init__(self, batch_size: int = 8, batch_interval: float = 0.5, 
+    def __init__(self, batch_size: int = None, batch_interval: float = 0.5, 
                  api_safe_rate: int = 2, max_workers: int = 3):
-        self.batch_size = batch_size  # 每批次关键词数量
+        # 使用配置中的批处理大小，如果没有指定则使用配置默认值
+        self.batch_size = batch_size if batch_size is not None else config.keywords_batch_size
         self.batch_interval = batch_interval  # 批次间间隔（秒）
         self.api_safe_rate = api_safe_rate  # 每个API安全频率（请求/秒）
         self.max_workers = max_workers  # 最大工作线程数
+        
+        # 验证配置合理性
+        if self.batch_size < 1:
+            logger.warning(f"批处理大小不合理({self.batch_size})，已重置为1")
+            self.batch_size = 1
+        elif self.batch_size > 10:
+            logger.warning(f"批处理大小过大({self.batch_size})，已重置为10")
+            self.batch_size = 10
 
 
 class MultiAPIKeywordManager:
@@ -38,10 +47,15 @@ class MultiAPIKeywordManager:
         """初始化多API管理器"""
         self.logger = logging.getLogger('content_watcher.keyword_api_multi')
         self._api_clients = {}  # 缓存API客户端实例
+        self._api_clients_lock = threading.RLock()  # 线程安全锁
         
         # 使用配置对象而非硬编码
         self.config = scheduler_config or APISchedulerConfig()
         self._workers_initialized = False
+        
+        # 记录实际使用的批处理大小
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"多API管理器初始化，批处理大小: {self.config.batch_size}")
 
     def _ensure_workers_initialized(self):
         """确保工作线程数已正确初始化"""
@@ -163,9 +177,15 @@ class MultiAPIKeywordManager:
     def _create_keyword_batches(self, keywords: List[str]) -> List[List[str]]:
         """将关键词列表分割成批次"""
         batches = []
-        for i in range(0, len(keywords), self.config.batch_size):
-            batch = keywords[i:i + self.config.batch_size]
+        batch_size = self.config.batch_size
+        for i in range(0, len(keywords), batch_size):
+            batch = keywords[i:i + batch_size]
             batches.append(batch)
+        
+        # 记录批次创建信息（仅调试级别）
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"创建 {len(batches)} 个批次，每批最多 {batch_size} 个关键词")
+        
         return batches
 
     def _queue_worker(self, task_queue: queue.Queue, results: Dict, results_lock: threading.Lock, 
@@ -176,6 +196,11 @@ class MultiAPIKeywordManager:
             self.logger.error(f"工作线程 {worker_id} 启动失败：没有可用的API地址")
             return
         
+        # 防护检查：确保除数不为零
+        if len(config.keywords_api_urls) == 0:
+            self.logger.error(f"工作线程 {worker_id} 启动失败：API地址列表为空")
+            return
+            
         api_index = worker_id % len(config.keywords_api_urls)
         api_url = config.keywords_api_urls[api_index]
         api_client = self._get_api_client(api_url)
@@ -188,6 +213,10 @@ class MultiAPIKeywordManager:
                 batch = task_queue.get(timeout=1)
                 if batch is None:  # 停止信号
                     break
+                
+                # 验证批次大小
+                if len(batch) > config.keywords_batch_size:
+                    self.logger.warning(f"工作线程 {worker_id} 收到超大批次({len(batch)})，可能导致API错误")
                 
                 # 处理批次
                 start_time = time.time()
@@ -238,10 +267,12 @@ class MultiAPIKeywordManager:
         return keyword_shards
 
     def _get_api_client(self, api_url: str) -> KeywordAPI:
-        """获取或创建API客户端实例"""
-        if api_url not in self._api_clients:
-            self._api_clients[api_url] = KeywordAPI(api_url)
-        return self._api_clients[api_url]
+        """获取或创建API客户端实例（线程安全）"""
+        with self._api_clients_lock:
+            if api_url not in self._api_clients:
+                self._api_clients[api_url] = KeywordAPI(api_url)
+                self.logger.debug(f"创建新的API客户端: {api_url}")
+            return self._api_clients[api_url]
 
     def _execute_parallel_queries(self, keyword_shards: List[List[str]], max_retries: int) -> Dict[str, Dict[str, Any]]:
         """执行并发查询"""
@@ -253,6 +284,11 @@ class MultiAPIKeywordManager:
             future_to_api = {}
             for api_index, shard in enumerate(keyword_shards):
                 if shard:  # 只处理非空分片
+                    # 防护检查：确保API索引有效
+                    if api_index >= len(config.keywords_api_urls):
+                        self.logger.error(f"API索引({api_index})超出范围，跳过此分片")
+                        continue
+                        
                     api_url = config.keywords_api_urls[api_index]
                     api_client = self._get_api_client(api_url)
                     future = executor.submit(api_client.batch_query_keywords, shard, max_retries)
@@ -296,14 +332,15 @@ class MultiAPIKeywordManager:
 
     def close(self):
         """关闭所有API客户端连接"""
-        for api_url, client in self._api_clients.items():
-            try:
-                if hasattr(client, 'close'):
-                    client.close()
-                    self.logger.debug(f"关闭API客户端连接: {api_url}")
-            except Exception as e:
-                self.logger.warning(f"关闭API客户端连接时出错 {api_url}: {e}")
-        self._api_clients.clear()
+        with self._api_clients_lock:
+            for api_url, client in self._api_clients.items():
+                try:
+                    if hasattr(client, 'close'):
+                        client.close()
+                        self.logger.debug(f"关闭API客户端连接: {api_url}")
+                except Exception as e:
+                    self.logger.warning(f"关闭API客户端连接时出错 {api_url}: {e}")
+            self._api_clients.clear()
 
     def __del__(self):
         """析构函数，确保资源清理"""
