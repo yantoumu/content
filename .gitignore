@@ -45,6 +45,11 @@ output.log
 
 # 排除敏感信息
 .env
+setup_github_secrets.sh
+setup_github_secrets_simple.sh
+**/setup_github_secrets*.sh
+*.key
+*.pem
 
 # 排除文档文件（可能包含敏感信息）
 GitHub环境变量配置示例.md
