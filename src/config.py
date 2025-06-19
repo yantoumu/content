@@ -135,6 +135,19 @@ class Config:
         self.sitemap_api_key = os.environ.get('SITEMAP_API_KEY', '')
         self.sitemap_api_enabled = False
 
+        # 新增关键词指标批量接口配置
+        metrics_api_url = os.environ.get('KEYWORD_METRICS_API_URL', '')
+        # 与旧 sitemap_api_key 复用同一 API Key
+        self.metrics_batch_api_url = metrics_api_url.strip() if metrics_api_url else ''
+
+        # 启用标志：同时存在 URL 与 API Key 即视为启用
+        self.metrics_api_enabled = bool(self.metrics_batch_api_url and self.sitemap_api_key)
+
+        if self.metrics_api_enabled:
+            logger.info("关键词指标批量 API 已启用")
+        else:
+            logger.warning("关键词指标批量 API 未启用或缺少配置")
+
         # 解析网站URL列表 - 同时支持WEBSITE_URLS和SITEMAP_URLS以保持向后兼容性
         urls_json = os.environ.get('WEBSITE_URLS', os.environ.get('SITEMAP_URLS', '[]'))
         self.website_urls = json.loads(urls_json)
@@ -147,12 +160,8 @@ class Config:
         # 使用验证器验证网站URL列表
         ConfigValidator.validate_website_urls(self.website_urls)
 
-        # 检查网站地图API配置 - 只使用批量提交
-        self.sitemap_api_enabled = bool(self.sitemap_batch_api_url and self.sitemap_api_key)
-        if not self.sitemap_api_enabled:
-            logger.warning("未设置网站地图API URL或API Key，将不会发送更新到API")
-        else:
-            logger.info("网站地图API已启用")
+        # 旧版 sitemap API 已弃用
+        self.sitemap_api_enabled = False
 
         # 使用验证器验证关键词API URLs
         self.keywords_api_urls = ConfigValidator.validate_and_filter_api_urls(self.keywords_api_urls)

@@ -95,7 +95,7 @@ class KeywordAPI:
         self.logger.debug(f"关键词去重: 原始数量 {len(keywords_list)}, 去重后数量 {len(unique_keywords)}")
 
         keyword_data = {}
-        batch_size = 10  # 增加批处理大小以提高效率
+        batch_size = 8  # 增加批处理大小以提高效率
 
         # 使用队列来管理关键词批次，便于失败重试
         keyword_queue = deque()

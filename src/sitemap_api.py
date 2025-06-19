@@ -39,7 +39,7 @@ class SitemapAPI:
         self.enabled = config.sitemap_api_enabled
 
         # 批量提交的最大记录数
-        self.max_batch_size = 20  # 根据要求设置为20条
+        self.max_batch_size = 50  # 根据要求设置为20条
 
         # 是否使用gzip压缩
         self.use_gzip = True  # 默认启用gzip压缩

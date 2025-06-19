@@ -147,12 +147,20 @@ class SiteDataCollector:
         keywords_set = set()
 
         for url in updated_urls:
-            keyword = keyword_extractor.extract_keywords_from_url(url)
-            # 只处理有效关键词的URL
-            if keyword:  # 如果关键词不为空
-                url_keywords_map[url] = keyword
-                valid_urls.append(url)
-                keywords_set.add(keyword)
+            keyword_raw = keyword_extractor.extract_keywords_from_url(url)
+            if not keyword_raw:
+                continue
+
+            # 规范化：去除首尾空白并小写
+            keyword = keyword_raw.strip().lower()
+
+            # 避免空字符串或全部空白
+            if not keyword:
+                continue
+
+            url_keywords_map[url] = keyword
+            valid_urls.append(url)
+            keywords_set.add(keyword)
 
         return url_keywords_map, valid_urls, keywords_set
 

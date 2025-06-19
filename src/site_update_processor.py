@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from src.config import config
 from src.data_manager import data_manager
 from src.encryption import encryptor
-from src.sitemap_api import sitemap_api
+from src.keyword_metrics_api import metrics_api
 
 # 配置日志
 logger = logging.getLogger('content_watcher.site_update_processor')
@@ -50,9 +50,9 @@ class SiteUpdateProcessor:
             url_keywords_map, global_keyword_data
         )
 
-        # 发送到网站地图API
-        if config.sitemap_api_enabled and updated_urls:
-            self._send_to_sitemap_api(updated_urls, url_keywords_map, keyword_results)
+        # 发送到关键词指标批量 API
+        if config.metrics_api_enabled and updated_urls:
+            self._send_to_metrics_api(updated_urls, url_keywords_map, keyword_results)
 
         # 保存关键词数据
         self._save_keyword_data(updated_urls, keywords_data_to_store, new_encrypted_data)
@@ -90,9 +90,9 @@ class SiteUpdateProcessor:
 
         return keyword_results, keywords_data_to_store
 
-    def _send_to_sitemap_api(self, updated_urls: List[str], 
+    def _send_to_metrics_api(self, updated_urls: List[str], 
                            url_keywords_map: dict, keyword_results: dict) -> None:
-        """发送更新数据到网站地图API"""
+        """发送更新数据到关键词指标批量 API"""
         try:
             # 准备批量提交数据
             batch_updates = []
@@ -100,7 +100,10 @@ class SiteUpdateProcessor:
             for url in updated_urls:
                 # 获取URL的关键词
                 keyword = url_keywords_map.get(url, "")
-                keywords_list = [keyword] if keyword else []
+                if not keyword:
+                    # 文档要求 keyword 必填，跳过无关键词 URL
+                    continue
+                keywords_list = [keyword]
                 # 获取关键词数据
                 api_data = keyword_results.get(url, {})
                 
@@ -114,7 +117,7 @@ class SiteUpdateProcessor:
                         logger.debug(f"关键词数据包含 {len(api_data['data'])} 个项目")
 
                     # 准备单条更新数据
-                    update_data = sitemap_api.prepare_update_data(url, keywords_list, api_data)
+                    update_data = metrics_api.prepare_update_data(url, keywords_list, api_data)
                     batch_updates.append(update_data)
                 except Exception as e:
                     # 不输出完整URL，避免敏感信息泄露
@@ -137,7 +140,7 @@ class SiteUpdateProcessor:
 
         # 创建队列
         update_queue = deque(batch_updates)
-        max_batch_size = sitemap_api.max_batch_size
+        max_batch_size = metrics_api.max_batch_size
         total_updates = len(batch_updates)
         processed_updates = 0
         failed_updates = []  # 存储失败的更新
@@ -163,7 +166,7 @@ class SiteUpdateProcessor:
                 logger.info(f"批量提交进度: {processed_updates}/{total_updates} ({progress:.1f}%)")
 
             # 批量提交
-            batch_sent = sitemap_api.send_batch_updates(current_batch)
+            batch_sent = metrics_api.send_batch_updates(current_batch)
 
             if batch_sent:
                 # 只在最后一批输出成功日志
@@ -176,9 +179,9 @@ class SiteUpdateProcessor:
 
                 # 记录详细的批量提交失败信息，帮助调试
                 for i, update_data in enumerate(current_batch):
-                    url = update_data.get("new_url", "")
-                    keywords = update_data.get("keywords", [])
-                    keyword_trends = update_data.get("keyword_trends_data", [])
+                    url = update_data.get("url", "")
+                    keywords = [update_data.get("keyword", "")]
+                    keyword_trends = update_data.get("metrics", {})
                     # 不输出完整URL，避免敏感信息泄露
                     domain_part = urlparse(url).netloc if url else '***'
                     logger.debug(f"批量提交失败的数据 {i+1}/{len(current_batch)}: "
@@ -204,7 +207,7 @@ class SiteUpdateProcessor:
 
         # 输出失败的URL详情
         for i, update in enumerate(failed_updates[:5]):  # 只显示前5个失败的URL
-            url = update.get("new_url", "")
+            url = update.get("url", "")
             # 不输出完整URL，避免敏感信息泄露
             domain_part = urlparse(url).netloc if url else '***'
             logger.warning(f"失败域名 {i+1}: {domain_part}")

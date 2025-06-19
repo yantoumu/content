@@ -5,12 +5,12 @@
 处理网站地图的下载和解析
 """
 
-import gzip
-import bz2
 import logging
 import datetime
-from abc import ABC, abstractmethod
-from typing import Dict, Optional, Union
+import gzip
+import io
+import time
+from typing import Dict, Optional, List
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
@@ -20,148 +20,7 @@ import requests
 logger = logging.getLogger('content_watcher.sitemap_parser')
 
 
-class CompressionHandler(ABC):
-    """压缩处理器抽象基类"""
 
-    @abstractmethod
-    def can_handle(self, content_type: str, url: str) -> bool:
-        """检查是否能处理指定的压缩格式
-
-        Args:
-            content_type: HTTP响应的Content-Type头
-            url: 请求的URL
-
-        Returns:
-            如果能处理返回True，否则返回False
-        """
-        pass
-
-    @abstractmethod
-    def decompress(self, data: bytes) -> bytes:
-        """解压数据
-
-        Args:
-            data: 压缩的二进制数据
-
-        Returns:
-            解压后的二进制数据
-
-        Raises:
-            Exception: 解压失败时抛出异常
-        """
-        pass
-
-    @abstractmethod
-    def get_name(self) -> str:
-        """获取压缩格式名称"""
-        pass
-
-
-class GzipCompressionHandler(CompressionHandler):
-    """Gzip压缩处理器"""
-
-    def can_handle(self, content_type: str, url: str) -> bool:
-        """检查是否为gzip压缩格式"""
-        # 检查Content-Type头
-        if content_type and ('gzip' in content_type.lower() or 'application/x-gzip' in content_type.lower()):
-            return True
-
-        # 检查URL扩展名
-        if url and url.lower().endswith('.gz'):
-            return True
-
-        return False
-
-    def decompress(self, data: bytes) -> bytes:
-        """使用gzip解压数据"""
-        try:
-            return gzip.decompress(data)
-        except gzip.BadGzipFile as e:
-            raise Exception(f"Gzip解压失败: {e}")
-        except Exception as e:
-            raise Exception(f"Gzip解压时出现未知错误: {e}")
-
-    def get_name(self) -> str:
-        """获取压缩格式名称"""
-        return "gzip"
-
-
-class BZip2CompressionHandler(CompressionHandler):
-    """BZip2压缩处理器"""
-
-    def can_handle(self, content_type: str, url: str) -> bool:
-        """检查是否为bzip2压缩格式"""
-        # 检查Content-Type头
-        if content_type and ('bzip2' in content_type.lower() or 'application/x-bzip2' in content_type.lower()):
-            return True
-
-        # 检查URL扩展名
-        if url and (url.lower().endswith('.bz2') or url.lower().endswith('.bzip2')):
-            return True
-
-        return False
-
-    def decompress(self, data: bytes) -> bytes:
-        """使用bzip2解压数据"""
-        try:
-            return bz2.decompress(data)
-        except OSError as e:
-            raise Exception(f"BZip2解压失败: {e}")
-        except Exception as e:
-            raise Exception(f"BZip2解压时出现未知错误: {e}")
-
-    def get_name(self) -> str:
-        """获取压缩格式名称"""
-        return "bzip2"
-
-
-class NoCompressionHandler(CompressionHandler):
-    """无压缩处理器（用于处理未压缩的内容）"""
-
-    def can_handle(self, content_type: str, url: str) -> bool:
-        """总是返回True，作为默认处理器"""
-        return True
-
-    def decompress(self, data: bytes) -> bytes:
-        """直接返回原始数据"""
-        return data
-
-    def get_name(self) -> str:
-        """获取压缩格式名称"""
-        return "none"
-
-
-class CompressionDetector:
-    """压缩格式检测器"""
-
-    def __init__(self):
-        """初始化检测器，注册所有支持的压缩处理器"""
-        self.handlers = [
-            GzipCompressionHandler(),
-            # 未来可以在这里添加其他压缩格式处理器
-            # BZip2CompressionHandler(),
-            # DeflateCompressionHandler(),
-            NoCompressionHandler(),  # 无压缩处理器应该放在最后作为默认选项
-        ]
-
-    def detect_and_get_handler(self, content_type: str, url: str) -> CompressionHandler:
-        """检测压缩格式并返回对应的处理器
-
-        Args:
-            content_type: HTTP响应的Content-Type头
-            url: 请求的URL
-
-        Returns:
-            对应的压缩处理器
-        """
-        for handler in self.handlers:
-            if handler.can_handle(content_type, url):
-                logger.debug(f"检测到压缩格式: {handler.get_name()}")
-                return handler
-
-        # 理论上不会到达这里，因为NoCompressionHandler总是返回True
-        logger.warning("未找到合适的压缩处理器，使用无压缩处理器")
-        return NoCompressionHandler()
 
 class SitemapParser:
     """处理网站地图的下载和解析"""
@@ -171,128 +30,458 @@ class SitemapParser:
         # 创建会话对象用于复用连接
         self.session = requests.Session()
         
-        # 设置标准浏览器请求头，避免403错误
+        # 设置简洁的浏览器请求头，让requests自动处理压缩
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0',
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Priority': 'u=0, i'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        
-        # 创建压缩检测器
-        self.compression_detector = CompressionDetector()
 
     def download_and_parse_sitemap(self, url: str, site_id: str) -> Dict[str, Optional[str]]:
         """下载并解析网站地图，返回URL和最后修改日期的映射"""
-        sitemap_data = {}
-
         try:
-            logger.info("正在下载网站地图")
+            logger.info(f"正在下载网站地图: {url}")
             
-            # 动态添加Referer头部，使用网站首页作为来源（关键修复）
-            parsed_url = urlparse(url)
-            referer_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-            headers = {'Referer': referer_url}
+            # 检查是否是RSS feed
+            if '/rss/' in url.lower() or url.lower().endswith('.rss') or 'feed' in url.lower():
+                logger.info("检测到RSS feed，尝试RSS解析")
+                return self._parse_rss_feed(url)
             
-            response = self.session.get(url, headers=headers, timeout=30)
+            # 检查是否是TXT格式
+            if url.lower().endswith('.txt'):
+                logger.info("检测到TXT格式，尝试纯文本解析")
+                return self._parse_txt_sitemap(url)
+            
+            # 检查是否是特殊网站，需要特殊处理
+            if 'hahagames.com' in url.lower():
+                logger.info("检测到hahagames.com，使用特殊处理")
+                return self._parse_hahagames_sitemap(url)
+            
+            # 设置请求头，确保支持压缩，模拟真实浏览器
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'max-age=0',
+            }
+            
+            # 下载内容 - 增加超时时间到70秒
+            response = self.session.get(url, timeout=70, headers=headers)
             response.raise_for_status()
-
-            # 获取响应内容和头信息
-            raw_content = response.content
-            content_type = response.headers.get('Content-Type', '').lower()
-
-            # 检测并处理压缩格式
-            compression_handler = self.compression_detector.detect_and_get_handler(content_type, url)
-
+            
+            # 检查内容类型
+            content_type = response.headers.get('content-type', '').lower()
+            logger.debug(f"Content-Type: {content_type}")
+            
+            # 检查是否是HTML而非XML
+            if 'text/html' in content_type:
+                logger.warning(f"返回的是HTML页面而非XML sitemap: {url}")
+                return {}
+            
+            # 尝试解析XML
             try:
-                # 解压内容（如果需要）
-                content = compression_handler.decompress(raw_content)
-                if compression_handler.get_name() != "none":
-                    logger.info(f"成功解压{compression_handler.get_name()}格式的网站地图")
-            except Exception as e:
-                logger.error(f"解压网站地图时出错: {e}")
-                # 不输出完整URL，避免敏感信息泄露
-                domain_part = urlparse(url).netloc if url else '***'
-                logger.error(f"出错的域名: {domain_part}")
-                return {}
-
-            # 解析XML内容
-            root = self._parse_xml_content(content)
-            if root is None:
-                return {}
+                root = ET.fromstring(response.content)
+            except ET.ParseError as parse_error:
+                # 如果是.gz文件且解析失败，尝试手动解压
+                if url.endswith('.gz'):
+                    logger.info("检测到.gz文件，尝试手动解压")
+                    return self._handle_gz_sitemap(response.content, url)
+                else:
+                    # 打印响应内容的前200字符用于调试
+                    content_preview = response.content[:200]
+                    logger.error(f"XML解析失败，内容预览: {content_preview}")
+                    raise parse_error
 
             # 提取URL数据
             sitemap_data = self._extract_urls_from_xml(root)
+            
+            if not sitemap_data:
+                logger.warning(f"sitemap解析成功但未找到任何URL: {url}")
+                # 检查是否是sitemap index文件
+                sitemap_data = self._try_parse_sitemap_index(root, url)
+                if not sitemap_data:
+                    # 打印XML结构用于调试
+                    logger.debug(f"XML根元素: {root.tag}, 子元素数量: {len(root)}")
+                    if len(root) > 0:
+                        logger.debug(f"第一个子元素: {root[0].tag}")
+                        # 打印前几个子元素的标签名
+                        child_tags = [child.tag for child in root[:5]]
+                        logger.debug(f"前几个子元素标签: {child_tags}")
 
             logger.info(f"已解析网站地图，找到 {len(sitemap_data)} 个URL")
             return sitemap_data
 
         except requests.RequestException as e:
             logger.error(f"下载网站地图时出错: {e}")
-            # 不输出完整URL，避免敏感信息泄露
             domain_part = urlparse(url).netloc if url else '***'
             logger.error(f"出错的域名: {domain_part}")
             return {}
         except ET.ParseError as e:
             logger.error(f"解析XML时出错: {e}")
-            # 不输出完整URL，避免敏感信息泄露
             domain_part = urlparse(url).netloc if url else '***'
             logger.error(f"出错的域名: {domain_part}")
             return {}
         except Exception as e:
             logger.error(f"处理网站地图时出现未知错误: {e}")
-            # 不输出完整URL，避免敏感信息泄露
             domain_part = urlparse(url).netloc if url else '***'
             logger.error(f"出错的域名: {domain_part}")
             return {}
 
-    def _parse_xml_content(self, content: bytes) -> Optional[ET.Element]:
-        """解析XML内容，处理不同的编码格式
-
-        Args:
-            content: XML内容的二进制数据
-
-        Returns:
-            解析后的XML根元素，失败时返回None
-        """
+    def _handle_gz_sitemap(self, content: bytes, url: str) -> Dict[str, Optional[str]]:
+        """处理.gz压缩的sitemap文件"""
         try:
-            # 预处理XML内容，检查是否需要处理编码问题
-            if content.startswith(b'<?xml'):
-                # XML内容正常，直接解析
-                root = ET.fromstring(content)
-            else:
-                # 尝试使用不同的编码解析
-                try:
-                    content_str = content.decode('utf-8')
-                    root = ET.fromstring(content_str)
-                except (UnicodeDecodeError, ET.ParseError):
-                    try:
-                        content_str = content.decode('latin-1')
-                        root = ET.fromstring(content_str)
-                    except (UnicodeDecodeError, ET.ParseError):
-                        # 如果仍然无法解析，抛出异常
-                        raise ET.ParseError("Unable to parse XML content")
-
-            return root
-
-        except ET.ParseError as e:
-            logger.error(f"解析XML时出错: {e}")
-            return None
+            # 尝试用gzip解压
+            with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz_file:
+                decompressed_content = gz_file.read()
+            
+            # 解析解压后的XML
+            root = ET.fromstring(decompressed_content)
+            
+            # 首先尝试提取普通URL
+            sitemap_data = self._extract_urls_from_xml(root)
+            
+            # 如果没有找到URL，检查是否是sitemap index
+            if not sitemap_data:
+                logger.info("GZ文件中未找到URL，检查是否为sitemap index")
+                sitemap_data = self._try_parse_sitemap_index(root, url)
+            
+            logger.info(f"成功解压并解析.gz sitemap: {url}")
+            return sitemap_data
+            
         except Exception as e:
-            logger.error(f"处理XML内容时出现未知错误: {e}")
-            return None
+            logger.error(f"处理.gz sitemap失败: {e}")
+            # 打印内容前100字节用于调试
+            content_preview = content[:100]
+            logger.error(f"内容预览: {content_preview}")
+            return {}
+
+    def _parse_rss_feed(self, url: str) -> Dict[str, Optional[str]]:
+        """解析RSS feed格式"""
+        try:
+            response = self.session.get(url, timeout=70)
+            response.raise_for_status()
+            
+            root = ET.fromstring(response.content)
+            sitemap_data = {}
+            
+            # RSS格式解析 - 支持多种RSS结构
+            # 方法1: 标准RSS格式 <item><link>
+            for item in root.findall('.//item'):
+                link_elem = item.find('link')
+                pubdate_elem = item.find('pubDate')
+                
+                # 如果没有找到link元素，尝试查找guid元素
+                if link_elem is None:
+                    link_elem = item.find('guid')
+                
+                if link_elem is not None and link_elem.text:
+                    url_text = link_elem.text.strip()
+                    if not SitemapParser._should_exclude_url(url_text):
+                        pubdate_text = pubdate_elem.text.strip() if pubdate_elem is not None and pubdate_elem.text else None
+                        sitemap_data[url_text] = pubdate_text
+            
+            # 方法2: 如果标准方法没找到URL，尝试其他RSS变体
+            if not sitemap_data:
+                # 查找所有包含URL的元素
+                for elem in root.iter():
+                    if elem.text and elem.text.strip().startswith('http'):
+                        url_text = elem.text.strip()
+                        if not SitemapParser._should_exclude_url(url_text):
+                            sitemap_data[url_text] = None
+            
+            logger.info(f"成功解析RSS feed: {url}")
+            return sitemap_data
+            
+        except Exception as e:
+            logger.error(f"解析RSS feed失败: {e}")
+            return {}
+
+    def _parse_txt_sitemap(self, url: str) -> Dict[str, Optional[str]]:
+        """解析纯文本格式的sitemap（每行一个URL）"""
+        try:
+            # 使用更完整的浏览器请求头
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = self.session.get(url, timeout=70, headers=headers)
+            response.raise_for_status()
+            
+            # 解析文本内容
+            content = response.text
+            sitemap_data = {}
+            
+            for line in content.splitlines():
+                line = line.strip()
+                if line and line.startswith('http'):
+                    if not SitemapParser._should_exclude_url(line):
+                        sitemap_data[line] = None  # TXT格式通常没有lastmod信息
+            
+            logger.info(f"成功解析TXT sitemap: {url}")
+            return sitemap_data
+            
+        except Exception as e:
+            logger.error(f"解析TXT sitemap失败: {e}")
+            return {}
+
+    def _parse_hahagames_sitemap(self, url: str) -> Dict[str, Optional[str]]:
+        """特殊处理hahagames.com的sitemap"""
+        try:
+            logger.info("开始特殊处理hahagames.com sitemap")
+            
+            # 使用多种不同的请求头尝试
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0'
+            ]
+            
+            referers = [
+                'https://www.google.com/',
+                'https://www.bing.com/',
+                'https://duckduckgo.com/',
+                'https://www.hahagames.com/',
+                ''  # 无Referer
+            ]
+            
+            for i, user_agent in enumerate(user_agents):
+                for j, referer in enumerate(referers):
+                    try:
+                        logger.info(f"尝试方案 {i+1}-{j+1}: UA={i+1}, Referer={j+1}")
+                        
+                        headers = {
+                            'User-Agent': user_agent,
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+                            'Accept-Encoding': 'gzip, deflate, br',
+                            'Connection': 'keep-alive',
+                            'Upgrade-Insecure-Requests': '1',
+                            'Sec-Fetch-Dest': 'document',
+                            'Sec-Fetch-Mode': 'navigate',
+                            'Sec-Fetch-Site': 'same-origin' if referer else 'none',
+                            'Cache-Control': 'no-cache',
+                            'Pragma': 'no-cache',
+                        }
+                        
+                        if referer:
+                            headers['Referer'] = referer
+                        
+                        # 创建新的session避免cookie干扰
+                        temp_session = requests.Session()
+                        temp_session.headers.update(headers)
+                        
+                        # 先访问主页建立session
+                        if referer == 'https://www.hahagames.com/':
+                            try:
+                                temp_session.get('https://www.hahagames.com/', timeout=30)
+                                time.sleep(2)  # 等待2秒
+                            except:
+                                pass
+                        
+                        # 请求sitemap
+                        response = temp_session.get(url, timeout=70)
+                        response.raise_for_status()
+                        
+                        logger.info(f"成功获取响应: 状态码={response.status_code}, 内容长度={len(response.content)}")
+                        
+                        # 检查内容类型
+                        content_type = response.headers.get('content-type', '').lower()
+                        logger.info(f"Content-Type: {content_type}")
+                        
+                        # 如果是HTML，尝试从中提取sitemap链接
+                        if 'text/html' in content_type:
+                            return self._extract_sitemap_from_html(response.text, url)
+                        
+                        # 尝试解析XML
+                        try:
+                            root = ET.fromstring(response.content)
+                            sitemap_data = self._extract_urls_from_xml(root)
+                            
+                            if not sitemap_data:
+                                sitemap_data = self._try_parse_sitemap_index(root, url)
+                            
+                            if sitemap_data:
+                                logger.info(f"hahagames.com解析成功: {len(sitemap_data)} 个URL")
+                                return sitemap_data
+                                
+                        except ET.ParseError as e:
+                            logger.warning(f"XML解析失败: {e}")
+                            # 打印内容前500字符用于调试
+                            content_preview = response.content[:500]
+                            logger.debug(f"内容预览: {content_preview}")
+                            continue
+                        
+                        temp_session.close()
+                        
+                    except requests.RequestException as e:
+                        logger.warning(f"请求失败 (方案 {i+1}-{j+1}): {e}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"处理失败 (方案 {i+1}-{j+1}): {e}")
+                        continue
+                    
+                    # 每次尝试间隔
+                    time.sleep(1)
+            
+            logger.error("所有方案都失败了，无法获取hahagames.com sitemap")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"hahagames.com特殊处理失败: {e}")
+            return {}
+
+    def _extract_sitemap_from_html(self, html_content: str, original_url: str) -> Dict[str, Optional[str]]:
+        """从HTML页面中提取sitemap链接"""
+        try:
+            sitemap_data = {}
+            
+            # 查找常见的sitemap链接模式
+            import re
+            
+            # 查找sitemap相关的链接
+            sitemap_patterns = [
+                r'<link[^>]*rel=["\']sitemap["\'][^>]*href=["\']([^"\']+)["\']',
+                r'<a[^>]*href=["\']([^"\']*sitemap[^"\']*\.xml[^"\']*)["\']',
+                r'href=["\']([^"\']*sitemap[^"\']*)["\']',
+                r'(https?://[^"\'\s]*sitemap[^"\'\s]*\.xml[^"\'\s]*)',
+            ]
+            
+            found_links = []
+            for pattern in sitemap_patterns:
+                matches = re.findall(pattern, html_content, re.IGNORECASE)
+                found_links.extend(matches)
+            
+            # 去重并过滤
+            unique_links = list(set(found_links))
+            logger.info(f"从HTML中找到 {len(unique_links)} 个潜在sitemap链接")
+            
+            for link in unique_links[:5]:  # 最多处理5个链接
+                try:
+                    # 构建完整URL
+                    if link.startswith('http'):
+                        full_url = link
+                    elif link.startswith('/'):
+                        base_url = '/'.join(original_url.split('/')[:3])
+                        full_url = base_url + link
+                    else:
+                        base_url = '/'.join(original_url.split('/')[:-1])
+                        full_url = base_url + '/' + link
+                    
+                    logger.info(f"尝试解析找到的sitemap: {full_url}")
+                    
+                    # 递归解析找到的sitemap
+                    sub_data = self.download_and_parse_sitemap(full_url, "sub")
+                    sitemap_data.update(sub_data)
+                    
+                except Exception as e:
+                    logger.warning(f"解析子sitemap失败: {link}, 错误: {e}")
+                    continue
+            
+            return sitemap_data
+            
+        except Exception as e:
+            logger.error(f"从HTML提取sitemap失败: {e}")
+            return {}
+
+    def _try_parse_sitemap_index(self, root: ET.Element, original_url: str) -> Dict[str, Optional[str]]:
+        """尝试解析sitemap index文件，获取子sitemap并合并结果"""
+        try:
+            # XML命名空间
+            namespaces = {
+                'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'
+            }
+            
+            # 查找sitemap元素而不是url元素 - 使用多种方法确保兼容性
+            sitemap_urls = []
+            
+            # 方法1: 使用命名空间前缀
+            for sitemap_elem in root.findall('.//sm:sitemap', namespaces):
+                loc_elem = sitemap_elem.find('./sm:loc', namespaces)
+                if loc_elem is not None and loc_elem.text:
+                    sitemap_urls.append(loc_elem.text.strip())
+            
+            # 方法2: 如果方法1失败，直接遍历查找
+            if not sitemap_urls:
+                for elem in root.iter():
+                    if elem.tag.endswith('}sitemap') or elem.tag == 'sitemap':
+                        for child in elem:
+                            if (child.tag.endswith('}loc') or child.tag == 'loc') and child.text:
+                                sitemap_urls.append(child.text.strip())
+            
+            # 方法3: 检查是否为纯文本格式的sitemap index (如game-game.com)
+            if not sitemap_urls:
+                sitemap_urls = self._extract_text_sitemap_urls(root, original_url)
+            
+            # 验证找到的URL是否都是sitemap格式
+            if sitemap_urls:
+                xml_count = sum(1 for url in sitemap_urls if url.endswith('.xml') or url.endswith('.xml.gz'))
+                if xml_count > len(sitemap_urls) * 0.8:  # 80%以上是XML文件才认为是sitemap index
+                    logger.info(f"检测到sitemap index格式，XML文件比例: {xml_count}/{len(sitemap_urls)}")
+                else:
+                    logger.warning(f"URL列表中XML文件比例过低: {xml_count}/{len(sitemap_urls)}，可能不是sitemap index")
+                    return {}
+            
+            if sitemap_urls:
+                logger.info(f"发现sitemap index，包含 {len(sitemap_urls)} 个子sitemap")
+                
+                # 合并所有子sitemap的结果
+                combined_data = {}
+                for sub_url in sitemap_urls[:5]:  # 限制最多处理5个子sitemap
+                    logger.info(f"解析子sitemap: {sub_url}")
+                    try:
+                        sub_data = self.download_and_parse_sitemap(sub_url, "sub")
+                        combined_data.update(sub_data)
+                        time.sleep(0.5)  # 避免请求过快
+                    except Exception as e:
+                        logger.warning(f"解析子sitemap失败: {sub_url}, 错误: {e}")
+                        continue
+                
+                logger.info(f"sitemap index解析完成，总共获得 {len(combined_data)} 个URL")
+                return combined_data
+            
+            return {}
+            
+        except Exception as e:
+            logger.error(f"解析sitemap index失败: {e}")
+            return {}
+
+    def _extract_text_sitemap_urls(self, root: ET.Element, original_url: str) -> List[str]:
+        """从纯文本内容中提取sitemap URL列表（如game-game.com格式）"""
+        try:
+            sitemap_urls = []
+            
+            # 遍历所有文本内容，查找URL
+            for elem in root.iter():
+                if elem.text and elem.text.strip():
+                    text = elem.text.strip()
+                    # 按空格分割，查找所有URL
+                    for part in text.split():
+                        part = part.strip()
+                        if (part.startswith('http') and 
+                            ('.xml' in part or '.gz' in part) and 
+                            'sitemap' in part.lower()):
+                            sitemap_urls.append(part)
+            
+            # 去重并限制数量
+            unique_urls = list(dict.fromkeys(sitemap_urls))  # 保持顺序的去重
+            logger.info(f"从文本内容中提取到 {len(unique_urls)} 个sitemap URL")
+            
+            return unique_urls[:20]  # 限制最多20个子sitemap
+            
+        except Exception as e:
+            logger.error(f"提取文本sitemap URL失败: {e}")
+            return []
 
     def _extract_urls_from_xml(self, root: ET.Element) -> Dict[str, Optional[str]]:
         """从XML根元素中提取URL数据
@@ -310,11 +499,42 @@ class SitemapParser:
             'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'
         }
 
-        # 查找所有URL条目
-        # 使用标准的ElementTree API
-        for url_elem in root.findall('.//sm:url', namespaces):
+        # 查找所有URL条目 - 使用多种方法以确保兼容性
+        url_elements = []
+        
+        # 方法1: 使用命名空间前缀
+        url_elements = root.findall('.//sm:url', namespaces)
+        
+        # 方法2: 如果方法1失败，尝试完整命名空间
+        if not url_elements:
+            url_elements = root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}url')
+        
+        # 方法3: 如果前面都失败，直接遍历查找
+        if not url_elements:
+            for elem in root.iter():
+                if elem.tag.endswith('}url') or elem.tag == 'url':
+                    url_elements.append(elem)
+        
+        # 方法4: 最后尝试不带命名空间
+        if not url_elements:
+            url_elements = root.findall('.//url')
+        
+        for url_elem in url_elements:
+            # 查找loc和lastmod元素，使用多种方法
+            loc_elem = None
+            lastmod_elem = None
+            
+            # 尝试带命名空间前缀的查找
             loc_elem = url_elem.find('./sm:loc', namespaces)
             lastmod_elem = url_elem.find('./sm:lastmod', namespaces)
+            
+            # 如果失败，直接遍历子元素查找
+            if loc_elem is None or lastmod_elem is None:
+                for child in url_elem:
+                    if child.tag.endswith('}loc') or child.tag == 'loc':
+                        loc_elem = child
+                    elif child.tag.endswith('}lastmod') or child.tag == 'lastmod':
+                        lastmod_elem = child
 
             if loc_elem is not None and loc_elem.text:
                 url_text = loc_elem.text.strip()
