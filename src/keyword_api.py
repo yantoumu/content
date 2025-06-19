@@ -229,25 +229,42 @@ class KeywordAPI:
                     retry_count += 1
                     if retry_count <= max_retries:
                         wait_time = self._calculate_wait_time(retry_count)
+                        # 显示具体的API URL和关键词信息用于调试
+                        keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                         self.logger.warning(f"API请求返回{response.status_code}，将在{wait_time}秒后重试")
+                        self.logger.warning(f"失败的API URL: {request_url}")
+                        self.logger.warning(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                         time.sleep(wait_time)
                         continue
 
+                # 显示具体的失败信息
+                keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                 self.logger.error(f"API请求失败: {response.status_code}")
+                self.logger.error(f"失败的API URL: {request_url}")
+                self.logger.error(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                 return None
 
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 retry_count += 1
                 if retry_count <= max_retries:
                     wait_time = self._calculate_wait_time(retry_count)
+                    keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                     self.logger.warning(f"API请求异常: {e.__class__.__name__}，将在{wait_time}秒后重试")
+                    self.logger.warning(f"异常的API URL: {request_url}")
+                    self.logger.warning(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                     time.sleep(wait_time)
                     continue
 
+                keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                 self.logger.error(f"API请求异常，重试次数超过上限: {e}")
+                self.logger.error(f"异常的API URL: {request_url}")
+                self.logger.error(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                 return None
             except Exception as e:
+                keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                 self.logger.error(f"API请求发生未预期的异常: {e}")
+                self.logger.error(f"异常的API URL: {request_url}")
+                self.logger.error(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                 return None
 
         return None

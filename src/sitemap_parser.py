@@ -69,9 +69,8 @@ class SitemapParser:
                 'Cache-Control': 'max-age=0',
             }
             
-            # 下载内容 - 增加超时时间到70秒
-            response = self.session.get(url, timeout=70, headers=headers)
-            response.raise_for_status()
+            # 下载内容 - 使用智能重试机制
+            response = self._download_with_retry(url, headers)
             
             # 检查内容类型
             content_type = response.headers.get('content-type', '').lower()
@@ -86,10 +85,10 @@ class SitemapParser:
             try:
                 root = ET.fromstring(response.content)
             except ET.ParseError as parse_error:
-                # 如果是.gz文件且解析失败，尝试手动解压
-                if url.endswith('.gz'):
-                    logger.info("检测到.gz文件，尝试手动解压")
-                    return self._handle_gz_sitemap(response.content, url)
+                # 智能检测并处理压缩内容
+                if self._is_compressed_content(response):
+                    logger.info("检测到压缩内容，尝试解压")
+                    return self._handle_compressed_sitemap(response, url)
                 else:
                     # 打印响应内容的前200字符用于调试
                     content_preview = response.content[:200]
@@ -131,13 +130,43 @@ class SitemapParser:
             logger.error(f"出错的域名: {domain_part}")
             return {}
 
-    def _handle_gz_sitemap(self, content: bytes, url: str) -> Dict[str, Optional[str]]:
-        """处理.gz压缩的sitemap文件"""
-        try:
-            # 尝试用gzip解压
-            with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz_file:
-                decompressed_content = gz_file.read()
+    def _is_compressed_content(self, response: requests.Response) -> bool:
+        """智能检测是否为压缩内容"""
+        # 检查URL扩展名
+        if response.url.endswith(('.gz', '.zip', '.bz2')):
+            return True
             
+        # 检查Content-Encoding头
+        content_encoding = response.headers.get('content-encoding', '').lower()
+        if 'gzip' in content_encoding or 'deflate' in content_encoding:
+            return True
+            
+        # 检查二进制内容特征（gzip魔数）
+        content = response.content
+        if len(content) >= 2 and content[:2] == b'\x1f\x8b':  # gzip魔数
+            return True
+            
+        return False
+
+    def _handle_compressed_sitemap(self, response: requests.Response, url: str) -> Dict[str, Optional[str]]:
+        """智能处理压缩的sitemap文件"""
+        content = response.content
+        
+        # 尝试gzip解压
+        try:
+            if content[:2] == b'\x1f\x8b' or url.endswith('.gz'):
+                with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz_file:
+                    decompressed_content = gz_file.read()
+                logger.info(f"成功使用gzip解压: {url}")
+            else:
+                # 如果不是gzip，尝试其他解压方式或直接使用原内容
+                decompressed_content = content
+                
+        except Exception as e:
+            logger.warning(f"gzip解压失败，尝试直接解析: {e}")
+            decompressed_content = content
+        
+        try:
             # 解析解压后的XML
             root = ET.fromstring(decompressed_content)
             
@@ -146,18 +175,79 @@ class SitemapParser:
             
             # 如果没有找到URL，检查是否是sitemap index
             if not sitemap_data:
-                logger.info("GZ文件中未找到URL，检查是否为sitemap index")
+                logger.info("解压内容中未找到URL，检查是否为sitemap index")
                 sitemap_data = self._try_parse_sitemap_index(root, url)
             
-            logger.info(f"成功解压并解析.gz sitemap: {url}")
+            logger.info(f"成功解压并解析sitemap: {url}")
             return sitemap_data
             
         except Exception as e:
-            logger.error(f"处理.gz sitemap失败: {e}")
+            logger.error(f"处理压缩sitemap失败: {e}")
             # 打印内容前100字节用于调试
             content_preview = content[:100]
             logger.error(f"内容预览: {content_preview}")
             return {}
+
+    def _download_with_retry(self, url: str, headers: dict, max_retries: int = 3) -> requests.Response:
+        """智能重试下载，针对不同错误类型使用不同策略"""
+        last_exception = None
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    # 等待时间：1秒、3秒、5秒
+                    wait_time = 1 + attempt * 2
+                    logger.info(f"重试第{attempt}次，等待{wait_time}秒...")
+                    time.sleep(wait_time)
+                
+                # 根据重试次数调整请求策略
+                current_headers = headers.copy()
+                if attempt > 0:
+                    # 第二次尝试：更换User-Agent
+                    user_agents = [
+                        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101'
+                    ]
+                    current_headers['User-Agent'] = user_agents[attempt % len(user_agents)]
+                
+                if attempt > 1:
+                    # 第三次尝试：添加Referer
+                    current_headers['Referer'] = 'https://www.google.com/'
+                
+                response = self.session.get(url, timeout=70, headers=current_headers)
+                response.raise_for_status()
+                return response
+                
+            except requests.exceptions.HTTPError as e:
+                last_exception = e
+                if e.response.status_code == 403:
+                    logger.warning(f"403错误，尝试更换请求策略 (尝试 {attempt + 1}/{max_retries})")
+                    continue
+                elif e.response.status_code >= 500:
+                    logger.warning(f"服务器错误 {e.response.status_code}，稍后重试 (尝试 {attempt + 1}/{max_retries})")
+                    continue
+                else:
+                    # 其他HTTP错误直接抛出
+                    raise
+            except (requests.exceptions.RequestException, Exception) as e:
+                last_exception = e
+                logger.warning(f"网络错误，重试 (尝试 {attempt + 1}/{max_retries}): {e}")
+                continue
+        
+        # 所有重试都失败，抛出最后一个异常
+        raise last_exception
+
+    def _handle_gz_sitemap(self, content: bytes, url: str) -> Dict[str, Optional[str]]:
+        """处理.gz压缩的sitemap文件（保留向后兼容）"""
+        # 创建临时响应对象
+        class TempResponse:
+            def __init__(self, content, url):
+                self.content = content
+                self.url = url
+                self.headers = {}
+        
+        return self._handle_compressed_sitemap(TempResponse(content, url), url)
 
     def _parse_rss_feed(self, url: str) -> Dict[str, Optional[str]]:
         """解析RSS feed格式"""

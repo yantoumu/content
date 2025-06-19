@@ -50,8 +50,10 @@ class KeywordMetricsAPI:
             return True, "success"
         if status in {429, 500, 502, 503, 504}:
             logger.warning(f"服务器暂不可用({status})，建议重试")
+            logger.warning(f"失败的API URL: {resp.url}")
             return False, "retry"
         logger.error(f"请求失败({status})，不重试")
+        logger.error(f"失败的API URL: {resp.url}")
         return False, "fail"
 
     @staticmethod
@@ -67,9 +69,11 @@ class KeywordMetricsAPI:
             except requests.exceptions.RequestException as e:
                 if retry >= max_retries:
                     logger.error(f"请求异常且超出重试次数: {e}")
+                    logger.error(f"异常的API URL: {config.metrics_batch_api_url}")
                     return False
                 wait = 2 ** retry
                 logger.warning(f"请求异常({e})，{wait}s 后重试 {retry+1}/{max_retries}")
+                logger.warning(f"异常的API URL: {config.metrics_batch_api_url}")
                 import time
                 time.sleep(wait)
         return False
