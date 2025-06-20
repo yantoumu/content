@@ -15,6 +15,8 @@ import requests
 
 from src.config import config
 from src.data_manager import data_manager
+from src.api_health_monitor import api_health_monitor
+from src.api_health_monitor import api_health_monitor
 
 # 配置日志
 logger = logging.getLogger('content_watcher.keyword_api')
@@ -25,26 +27,36 @@ class KeywordAPI:
     合并了KeywordAPI和KeywordAPIClient的功能，提供统一的API交互接口
     """
 
-    def __init__(self, api_url=None, headers=None, timeout=80):
+    def __init__(self, api_url=None, headers=None, timeout=None):
         """初始化API交互器
 
         Args:
             api_url: API基础URL，如果为None则从配置中获取第一个
             headers: 请求头，默认为None
-            timeout: 请求超时时间，默认为80秒
+            timeout: 请求超时时间，默认使用配置值
         """
         self.api_url = api_url or (config.keywords_api_urls[0] if config.keywords_api_urls else '')
         self.headers = headers or {}
         # 添加gzip压缩头
         if 'Accept-Encoding' not in self.headers:
             self.headers['Accept-Encoding'] = 'gzip, deflate'
-        self.timeout = timeout
+        self.timeout = timeout or config.keyword_query_timeout  # 使用配置的超时时间
         self.logger = logging.getLogger('content_watcher.keyword_api')
+
+        # API健康状态跟踪 - 新增
+        self.consecutive_failures = 0
+        self.last_success_time = time.time()
+        self.is_circuit_open = False
+        self.circuit_open_time = None
 
         # 创建一个会话对象，用于复用连接
         self.session = requests.Session()
         # 设置默认请求头
         self.session.headers.update(self.headers)
+
+        # 注册到健康监控器
+        if self.api_url:
+            api_health_monitor.register_api(self.api_url)
 
     def get_keyword_data(self, keywords: Union[str, List[str]], max_retries: int = 2) -> Dict[str, Any]:
         """获取关键词数据
@@ -137,14 +149,7 @@ class KeywordAPI:
                     if not keyword:
                         continue
 
-                    # 标准化月份名称，确保匹配一致性
-                    if 'metrics' in item and 'monthly_searches' in item['metrics']:
-                        for month_data in item['metrics']['monthly_searches']:
-                            if 'month' in month_data:
-                                # 如果月份是字符串，转换为大写
-                                if isinstance(month_data['month'], str):
-                                    month_data['month'] = month_data['month'].upper()
-                                # 如果是整数，保持不变
+                    # 直接使用API返回的新JSON格式数据
 
                     # 记录关键词数据 - 直接使用API返回的数据，不需要额外过滤
                     if keyword in keyword_data:
@@ -176,7 +181,7 @@ class KeywordAPI:
                             'metrics': {
                                 'avg_monthly_searches': 0,
                                 'competition': 'LOW',
-                                'competition_index': '0',
+                                'competition_index': 0,
                                 'monthly_searches': []
                             }
                         }
@@ -189,16 +194,22 @@ class KeywordAPI:
 
         return keyword_data
 
-    def _fetch_from_api(self, keywords: str, max_retries: int) -> Optional[Dict[str, Any]]:
-        """从API获取数据，处理重试逻辑
+    def _fetch_from_api(self, keywords: str, max_retries: int = None) -> Optional[Dict[str, Any]]:
+        """从API获取数据，处理重试逻辑 - 针对API 500错误优化
 
         Args:
             keywords: 关键词字符串
-            max_retries: 最大重试次数
+            max_retries: 最大重试次数，默认使用配置值
 
         Returns:
             API响应数据或None
         """
+        # 检查API是否可用
+        if not api_health_monitor.is_api_available(self.api_url):
+            self.logger.warning(f"API不可用，跳过请求: {self.api_url}")
+            return None
+
+        max_retries = max_retries or config.api_retry_max
         retry_count = 0
 
         while retry_count <= max_retries:
@@ -207,10 +218,14 @@ class KeywordAPI:
                 request_url = f"{self.api_url}{keywords}"
                 keyword_count = len(keywords.split(','))
                 self.logger.debug(f"请求关键词API，关键词数量: {keyword_count}")
-                
-                # 验证关键词数量是否超出配置限制
-                if keyword_count > config.keywords_batch_size:
-                    self.logger.warning(f"单次请求关键词数量({keyword_count})超出配置限制({config.keywords_batch_size})")
+
+                # 使用自适应批处理大小验证
+                adaptive_batch_size = api_health_monitor.get_adaptive_batch_size(self.api_url)
+                if keyword_count > adaptive_batch_size:
+                    self.logger.warning(f"单次请求关键词数量({keyword_count})超出自适应限制({adaptive_batch_size})")
+
+                # 记录请求开始时间
+                request_start_time = time.time()
 
                 # 使用session发送请求，复用连接
                 response = self.session.get(
@@ -218,12 +233,20 @@ class KeywordAPI:
                     timeout=self.timeout
                 )
 
+                # 计算响应时间
+                response_time = time.time() - request_start_time
+
                 # 处理响应
                 if response.status_code == 200:
                     try:
-                        return response.json()
+                        result = response.json()
+                        # 记录成功请求到健康监控器
+                        api_health_monitor.record_request(self.api_url, True, response_time)
+                        return result
                     except json.JSONDecodeError:
                         self.logger.error(f"API返回非JSON数据: {keywords}")
+                        # 记录失败请求到健康监控器
+                        api_health_monitor.record_request(self.api_url, False, response_time)
                         return None
                 elif self._should_retry(response.status_code):
                     retry_count += 1
@@ -231,10 +254,16 @@ class KeywordAPI:
                         wait_time = self._calculate_wait_time(retry_count)
                         # 显示具体的API URL和关键词信息用于调试
                         keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
-                        self.logger.warning(f"API请求返回{response.status_code}，将在{wait_time}秒后重试")
+                        self.logger.warning(f"API请求返回{response.status_code}，将在{wait_time:.1f}秒后重试")
                         self.logger.warning(f"失败的API URL: {request_url}")
                         self.logger.warning(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
-                        time.sleep(wait_time)
+
+                        # 记录失败请求到健康监控器
+                        api_health_monitor.record_request(self.api_url, False, response_time)
+
+                        # 使用自适应间隔以减少API压力
+                        adaptive_interval = api_health_monitor.get_adaptive_interval(self.api_url)
+                        time.sleep(wait_time + adaptive_interval)
                         continue
 
                 # 显示具体的失败信息
@@ -242,6 +271,8 @@ class KeywordAPI:
                 self.logger.error(f"API请求失败: {response.status_code}")
                 self.logger.error(f"失败的API URL: {request_url}")
                 self.logger.error(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
+                # 记录失败请求到健康监控器
+                api_health_monitor.record_request(self.api_url, False, response_time)
                 return None
 
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -280,8 +311,8 @@ class KeywordAPI:
         """
         return status_code in [429, 500, 502, 503, 504]
 
-    def _calculate_wait_time(self, retry_count: int) -> int:
-        """计算重试等待时间
+    def _calculate_wait_time(self, retry_count: int) -> float:
+        """计算重试等待时间 - 针对API 500错误优化
 
         Args:
             retry_count: 当前重试次数
@@ -289,7 +320,41 @@ class KeywordAPI:
         Returns:
             等待时间（秒）
         """
-        return 2 ** retry_count  # 指数退避: 2, 4, 8...
+        # 针对500错误使用更长的退避时间
+        base_wait = 3 ** retry_count  # 改为3的指数: 3, 9, 27...
+        max_wait = 60  # 最大等待60秒
+        return min(base_wait, max_wait)
+
+    def _check_circuit_breaker(self) -> bool:
+        """检查熔断器状态"""
+        if not self.is_circuit_open:
+            return False
+
+        # 检查是否应该尝试恢复
+        if time.time() - self.circuit_open_time > config.api_health_check_interval:
+            self.logger.info(f"尝试恢复API连接: {self.api_url}")
+            self.is_circuit_open = False
+            self.circuit_open_time = None
+            return False
+
+        return True
+
+    def _update_api_health(self, success: bool):
+        """更新API健康状态"""
+        if success:
+            self.consecutive_failures = 0
+            self.last_success_time = time.time()
+            if self.is_circuit_open:
+                self.logger.info(f"API恢复正常: {self.api_url}")
+                self.is_circuit_open = False
+                self.circuit_open_time = None
+        else:
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= config.api_circuit_breaker_threshold:
+                if not self.is_circuit_open:
+                    self.logger.warning(f"API熔断器开启: {self.api_url} (连续失败{self.consecutive_failures}次)")
+                    self.is_circuit_open = True
+                    self.circuit_open_time = time.time()
 
     def _create_empty_result(self, keywords: Union[str, List[str]]) -> Dict[str, Any]:
         """创建空的结果数据
@@ -319,7 +384,7 @@ class KeywordAPI:
                 'metrics': {
                     'avg_monthly_searches': 0,
                     'competition': 'LOW',
-                    'competition_index': '0',
+                    'competition_index': 0,
                     'monthly_searches': []
                 }
             })

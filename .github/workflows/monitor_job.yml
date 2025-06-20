@@ -37,7 +37,12 @@ jobs:
           WEBSITE_URLS: ${{ secrets.WEBSITE_URLS }}
           DEBUG: ${{ secrets.DEBUG || 'false' }}
           MAX_CONCURRENT: ${{ secrets.MAX_CONCURRENT || '3' }}
-          KEYWORDS_BATCH_SIZE: ${{ secrets.KEYWORDS_BATCH_SIZE || '4' }}
+          KEYWORDS_BATCH_SIZE: ${{ secrets.KEYWORDS_BATCH_SIZE || '2' }}
+          API_RETRY_MAX: ${{ secrets.API_RETRY_MAX || '3' }}
+          API_HEALTH_CHECK_INTERVAL: ${{ secrets.API_HEALTH_CHECK_INTERVAL || '30' }}
+          API_CIRCUIT_BREAKER_THRESHOLD: ${{ secrets.API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+          API_REQUEST_INTERVAL: ${{ secrets.API_REQUEST_INTERVAL || '1.0' }}
+          KEYWORD_QUERY_TIMEOUT: ${{ secrets.KEYWORD_QUERY_TIMEOUT || '60' }}
           LOGLEVEL: ${{ secrets.LOGLEVEL || 'INFO' }}
         run: |
           python main.py

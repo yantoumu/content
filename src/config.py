@@ -56,13 +56,13 @@ class ConfigValidator:
 
     @staticmethod
     def validate_batch_size(batch_size: int) -> int:
-        """验证批处理大小配置"""
+        """验证批处理大小配置 - 针对API 500错误优化"""
         if batch_size < 1:
             logger.warning(f"批处理大小不能小于1，已重置为1")
             return 1
-        elif batch_size > 10:
-            logger.warning(f"批处理大小过大({batch_size})，已重置为10")
-            return 10
+        elif batch_size > 3:  # 从10降低到3，减少API压力
+            logger.warning(f"批处理大小过大({batch_size})，已重置为3以减少API 500错误")
+            return 3
         return batch_size
 
 
@@ -83,8 +83,8 @@ class Config:
         # 网站监控配置
         self.max_concurrent = int(os.environ.get('MAX_CONCURRENT', '3'))
 
-        # 关键词批处理配置 - 新增
-        raw_batch_size = int(os.environ.get('KEYWORDS_BATCH_SIZE', '4'))
+        # 关键词批处理配置 - 针对API 500错误优化
+        raw_batch_size = int(os.environ.get('KEYWORDS_BATCH_SIZE', '2'))  # 从4降低到2
         self.keywords_batch_size = ConfigValidator.validate_batch_size(raw_batch_size)
         if raw_batch_size != self.keywords_batch_size:
             logger.info(f"关键词批处理大小已调整: {raw_batch_size} → {self.keywords_batch_size}")
@@ -97,8 +97,14 @@ class Config:
             logger.warning("KEYWORDS_API_URLS格式无效，使用空列表")
             self.keywords_api_urls = []
 
-        # 配置超时设置
-        self.keyword_query_timeout = int(os.environ.get('KEYWORD_QUERY_TIMEOUT', '30'))  # 关键词查询超时(秒)
+        # API健康检查和容错配置 - 新增
+        self.api_retry_max = int(os.environ.get('API_RETRY_MAX', '3'))  # 最大重试次数
+        self.api_health_check_interval = int(os.environ.get('API_HEALTH_CHECK_INTERVAL', '30'))  # 健康检查间隔
+        self.api_circuit_breaker_threshold = int(os.environ.get('API_CIRCUIT_BREAKER_THRESHOLD', '5'))  # 熔断阈值
+        self.api_request_interval = float(os.environ.get('API_REQUEST_INTERVAL', '1.0'))  # 请求间隔(秒)
+
+        # 配置超时设置 - 针对API 500错误优化
+        self.keyword_query_timeout = int(os.environ.get('KEYWORD_QUERY_TIMEOUT', '60'))  # 从30增加到60秒
         self.site_request_timeout = int(os.environ.get('SITE_REQUEST_TIMEOUT', '20'))  # 网站请求超时(秒)
 
         # API密钥配置 - 继续使用SITEMAP_API_KEY作为通用API密钥

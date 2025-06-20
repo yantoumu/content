@@ -16,28 +16,30 @@ import threading
 
 from src.config import config
 from src.keyword_api import KeywordAPI
+from src.api_health_monitor import api_health_monitor
 
 # 配置日志
 logger = logging.getLogger('content_watcher.keyword_api_multi')
 
 class APISchedulerConfig:
-    """API调度器配置类 - 符合单一职责原则"""
-    
-    def __init__(self, batch_size: int = None, batch_interval: float = 0.5, 
-                 api_safe_rate: int = 2, max_workers: int = 3):
+    """API调度器配置类 - 针对API 500错误优化"""
+
+    def __init__(self, batch_size: int = None, batch_interval: float = None,
+                 api_safe_rate: int = 1, max_workers: int = 2):  # 降低默认并发
         # 使用配置中的批处理大小，如果没有指定则使用配置默认值
         self.batch_size = batch_size if batch_size is not None else config.keywords_batch_size
-        self.batch_interval = batch_interval  # 批次间间隔（秒）
+        self.batch_interval = batch_interval if batch_interval is not None else config.api_request_interval
         self.api_safe_rate = api_safe_rate  # 每个API安全频率（请求/秒）
         self.max_workers = max_workers  # 最大工作线程数
-        
+        self.queue_timeout = 300  # 队列超时时间（秒）- 新增
+
         # 验证配置合理性
         if self.batch_size < 1:
             logger.warning(f"批处理大小不合理({self.batch_size})，已重置为1")
             self.batch_size = 1
-        elif self.batch_size > 10:
-            logger.warning(f"批处理大小过大({self.batch_size})，已重置为10")
-            self.batch_size = 10
+        elif self.batch_size > 3:  # 从10降低到3
+            logger.warning(f"批处理大小过大({self.batch_size})，已重置为3以减少API压力")
+            self.batch_size = 3
 
 
 class MultiAPIKeywordManager:
@@ -161,16 +163,25 @@ class MultiAPIKeywordManager:
             thread.start()
             threads.append(thread)
         
-        # 等待所有任务完成
-        task_queue.join()
-        
+        # 使用非阻塞等待替代task_queue.join() - 解决队列阻塞问题
+        start_time = time.time()
+        while not task_queue.empty():
+            elapsed_time = time.time() - start_time
+            if elapsed_time > self.config.queue_timeout:
+                self.logger.warning(f"队列处理超时({self.config.queue_timeout}秒)，强制结束")
+                break
+            time.sleep(0.1)  # 短暂休眠避免CPU占用过高
+
         # 停止工作线程
         for _ in threads:
             task_queue.put(None)  # 发送停止信号
-        
+
+        # 等待线程结束，但设置超时
         for thread in threads:
-            thread.join()
-        
+            thread.join(timeout=30)  # 最多等待30秒
+            if thread.is_alive():
+                self.logger.warning(f"工作线程未能正常结束")
+
         self.logger.info(f"队列调度完成，共处理 {len(results)} 个关键词")
         return results
 
@@ -227,15 +238,17 @@ class MultiAPIKeywordManager:
                     with results_lock:
                         results.update(batch_result)
                     
-                    # 计算处理时间和需要的间隔
+                    # 计算处理时间和需要的间隔 - 针对API 500错误优化
                     process_time = time.time() - start_time
-                    required_interval = max(0, self.config.batch_interval - process_time)
-                    
+                    # 增加基础间隔以减少API压力
+                    base_interval = self.config.batch_interval
+                    required_interval = max(base_interval, base_interval * 2 - process_time)
+
                     self.logger.debug(f"工作线程 {worker_id} 完成批次 {len(batch)} 个关键词，"
                                     f"耗时 {process_time:.2f}s，休息 {required_interval:.2f}s")
-                    
-                    if required_interval > 0:
-                        time.sleep(required_interval)
+
+                    # 总是休眠以减少API压力
+                    time.sleep(required_interval)
                         
                 except Exception as e:
                     self.logger.error(f"工作线程 {worker_id} 处理批次失败: {e}")
@@ -256,14 +269,34 @@ class MultiAPIKeywordManager:
         self.logger.debug(f"队列工作线程 {worker_id} 结束")
 
     def _shard_keywords(self, keywords: List[str], num_apis: int) -> List[List[str]]:
-        """将关键词分片到不同API"""
+        """将关键词分片到不同API - 基于健康状态优化分配"""
         keyword_shards = [[] for _ in range(num_apis)]
-        
-        # 轮询分配关键词到不同API
+
+        # 获取API健康状态，优先分配给健康的API
+        api_health_scores = []
+        for i, api_url in enumerate(config.keywords_api_urls[:num_apis]):
+            if api_health_monitor.is_api_available(api_url):
+                # 健康的API获得更高权重
+                health_summary = api_health_monitor.get_health_summary().get(api_url, {})
+                success_rate = health_summary.get('success_rate', 1.0)
+                api_health_scores.append((i, success_rate))
+            else:
+                api_health_scores.append((i, 0.0))  # 不健康的API权重为0
+
+        # 按健康分数排序
+        api_health_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # 智能分配：优先分配给健康的API
         for i, keyword in enumerate(keywords):
-            api_index = i % num_apis
-            keyword_shards[api_index].append(keyword)
-        
+            if api_health_scores:
+                # 选择最健康的可用API
+                best_api_index = api_health_scores[i % len(api_health_scores)][0]
+                keyword_shards[best_api_index].append(keyword)
+            else:
+                # 如果没有健康的API，使用轮询
+                api_index = i % num_apis
+                keyword_shards[api_index].append(keyword)
+
         return keyword_shards
 
     def _get_api_client(self, api_url: str) -> KeywordAPI:
@@ -355,7 +388,7 @@ class MultiAPIKeywordManager:
                 'metrics': {
                     'avg_monthly_searches': 0,
                     'competition': 'LOW',
-                    'competition_index': '0',
+                    'competition_index': 0,
                     'monthly_searches': []
                 }
             }

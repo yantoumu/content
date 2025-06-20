@@ -83,7 +83,7 @@ class KeywordMetricsAPI:
         """将旧结构转换为新接口所需结构。取首关键词与 metrics。"""
         keyword = keywords[0] if keywords and keywords[0] else ""
 
-        # 默认指标占位，确保 monthly_searches 非空
+        # 默认指标占位，确保 monthly_searches 非空，使用新JSON格式
         metrics: Dict[str, Any] = {
             "avg_monthly_searches": 0,
             "competition": "LOW",
@@ -97,11 +97,14 @@ class KeywordMetricsAPI:
             if isinstance(first_item, dict) and "metrics" in first_item:
                 metrics = first_item["metrics"]
 
+        # 转换新JSON格式的中文字段为sitemap API期望的英文字段
+        metrics = self._convert_monthly_searches_format(metrics)
+
         # 确保 monthly_searches 至少有 1 条记录
         if not metrics.get("monthly_searches"):
             import datetime
             now = datetime.datetime.now()
-            metrics["monthly_searches"] = [{"年": now.year, "月": now.month, "searches": 0}]
+            metrics["monthly_searches"] = [{"year": str(now.year), "month": str(now.month), "searches": 0}]
 
         return {
             "keyword": keyword,
@@ -142,6 +145,71 @@ class KeywordMetricsAPI:
 
         return self._execute_with_retry(do_request, max_retries)
 
+    def _convert_monthly_searches_format(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """转换新JSON格式的中文字段为sitemap API期望的英文字段和字符串类型
+
+        Args:
+            metrics: 包含月度搜索数据的指标字典
+
+        Returns:
+            转换后的指标字典
+        """
+        if not metrics.get("monthly_searches"):
+            return metrics
+
+        converted_monthly_searches = []
+        for month_data in metrics["monthly_searches"]:
+            if not isinstance(month_data, dict):
+                continue
+
+            converted_item = {}
+
+            # 转换年份字段：年 -> year，数字 -> 字符串，提供默认值
+            year_value = None
+            if "年" in month_data and month_data["年"] is not None:
+                try:
+                    year_value = str(month_data["年"])
+                except (TypeError, ValueError):
+                    year_value = "2024"  # 默认年份
+            elif "year" in month_data and month_data["year"] is not None:
+                try:
+                    year_value = str(month_data["year"])
+                except (TypeError, ValueError):
+                    year_value = "2024"  # 默认年份
+            else:
+                year_value = "2024"  # 默认年份
+
+            # 转换月份字段：月 -> month，数字 -> 字符串，提供默认值
+            month_value = None
+            if "月" in month_data and month_data["月"] is not None:
+                try:
+                    month_value = str(month_data["月"])
+                except (TypeError, ValueError):
+                    month_value = "1"  # 默认月份
+            elif "month" in month_data and month_data["month"] is not None:
+                try:
+                    month_value = str(month_data["month"])
+                except (TypeError, ValueError):
+                    month_value = "1"  # 默认月份
+            else:
+                month_value = "1"  # 默认月份
+
+            # 构建转换后的数据项
+            converted_item = {
+                "year": year_value,
+                "month": month_value,
+                "searches": month_data.get("searches", 0)  # 提供默认搜索量
+            }
+
+            converted_monthly_searches.append(converted_item)
+
+        # 只在有转换时才拷贝数据，优化性能
+        if converted_monthly_searches:
+            metrics = metrics.copy()  # 避免修改原始数据
+            metrics["monthly_searches"] = converted_monthly_searches
+
+        return metrics
+
 
 # 创建单例供全局使用
-metrics_api = KeywordMetricsAPI() 
+metrics_api = KeywordMetricsAPI()
