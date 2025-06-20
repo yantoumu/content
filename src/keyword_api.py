@@ -252,10 +252,9 @@ class KeywordAPI:
                     retry_count += 1
                     if retry_count <= max_retries:
                         wait_time = self._calculate_wait_time(retry_count)
-                        # 显示具体的API URL和关键词信息用于调试
+                        # 显示关键词信息用于调试，但不输出完整API URL
                         keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                         self.logger.warning(f"API请求返回{response.status_code}，将在{wait_time:.1f}秒后重试")
-                        self.logger.warning(f"失败的API URL: {request_url}")
                         self.logger.warning(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
 
                         # 记录失败请求到健康监控器
@@ -266,10 +265,9 @@ class KeywordAPI:
                         time.sleep(wait_time + adaptive_interval)
                         continue
 
-                # 显示具体的失败信息
+                # 显示失败信息，但不输出完整API URL
                 keywords_preview = keywords[:50] + "..." if len(keywords) > 50 else keywords
                 self.logger.error(f"API请求失败: {response.status_code}")
-                self.logger.error(f"失败的API URL: {request_url}")
                 self.logger.error(f"请求的关键词: {keywords_preview} (共{keyword_count}个)")
                 # 记录失败请求到健康监控器
                 api_health_monitor.record_request(self.api_url, False, response_time)

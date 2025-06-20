@@ -39,7 +39,9 @@ class SitemapParser:
     def download_and_parse_sitemap(self, url: str, site_id: str) -> Dict[str, Optional[str]]:
         """下载并解析网站地图，返回URL和最后修改日期的映射"""
         try:
-            logger.info(f"正在下载网站地图: {url}")
+            # 不输出完整URL，只输出域名部分
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.info(f"正在下载网站地图: {domain_part}")
             return self._dispatch_by_format(url)
         except Exception as e:
             logger.error(f"处理网站地图时出现错误: {e}")
@@ -117,7 +119,8 @@ class SitemapParser:
 
             # 检查是否是HTML而非XML
             if 'text/html' in content_type:
-                logger.warning(f"返回的是HTML页面而非XML sitemap: {url}")
+                domain_part = urlparse(url).netloc if url else '***'
+                logger.warning(f"返回的是HTML页面而非XML sitemap: {domain_part}")
                 return {}
 
             # 预检测是否为压缩内容（优先检测，避免无效XML解析）
@@ -132,8 +135,7 @@ class SitemapParser:
             except ET.ParseError as parse_error:
                 # 如果XML解析失败，再次检查是否为压缩内容（兜底策略）
                 logger.warning("XML解析失败，进行压缩内容兜底检测")
-                content_preview = response.content[:200]
-                logger.error(f"XML解析失败，内容预览: {content_preview}")
+                logger.error(f"XML解析失败，内容长度: {len(response.content)} bytes")
 
                 # 最后尝试压缩解析
                 if response.content.startswith(b'\x1f\x8b'):  # gzip魔数
@@ -152,7 +154,8 @@ class SitemapParser:
         sitemap_data = self._extract_urls_from_xml(root)
 
         if not sitemap_data:
-            logger.warning(f"sitemap解析成功但未找到任何URL: {url}")
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.warning(f"sitemap解析成功但未找到任何URL: {domain_part}")
             # 检查是否是sitemap index文件
             sitemap_data = self._try_parse_sitemap_index(root, url)
             if not sitemap_data:
@@ -210,7 +213,8 @@ class SitemapParser:
                 try:
                     import brotli
                     decompressed_content = brotli.decompress(content)
-                    logger.info(f"成功使用Brotli解压: {url}")
+                    domain_part = urlparse(url).netloc if url else '***'
+                    logger.info(f"成功使用Brotli解压: {domain_part}")
                 except ImportError:
                     logger.warning("Brotli库未安装，尝试其他解压方式")
                     decompressed_content = content
@@ -221,27 +225,32 @@ class SitemapParser:
             elif 'gzip' in content_encoding or content[:2] == b'\x1f\x8b':
                 with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz_file:
                     decompressed_content = gz_file.read()
-                logger.info(f"成功使用gzip解压: {url}")
+                domain_part = urlparse(url).netloc if url else '***'
+                logger.info(f"成功使用gzip解压: {domain_part}")
 
             elif 'deflate' in content_encoding:
                 import zlib
                 decompressed_content = zlib.decompress(content)
-                logger.info(f"成功使用deflate解压: {url}")
+                domain_part = urlparse(url).netloc if url else '***'
+                logger.info(f"成功使用deflate解压: {domain_part}")
 
             # 策略2: 基于URL扩展名的解压
             elif url.endswith('.gz'):
                 try:
                     with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz_file:
                         decompressed_content = gz_file.read()
-                    logger.info(f"基于.gz扩展名成功解压: {url}")
+                    domain_part = urlparse(url).netloc if url else '***'
+                    logger.info(f"基于.gz扩展名成功解压: {domain_part}")
                 except:
                     decompressed_content = content
-                    logger.warning(f"gzip解压失败，使用原始内容: {url}")
+                    domain_part = urlparse(url).netloc if url else '***'
+                    logger.warning(f"gzip解压失败，使用原始内容: {domain_part}")
 
             # 策略3: 直接使用原内容
             else:
                 decompressed_content = content
-                logger.info(f"使用原始内容（未检测到压缩）: {url}")
+                domain_part = urlparse(url).netloc if url else '***'
+                logger.info(f"使用原始内容（未检测到压缩）: {domain_part}")
 
         except Exception as e:
             logger.warning(f"解压失败，使用原始内容: {e}")
@@ -254,12 +263,13 @@ class SitemapParser:
 
         except Exception as e:
             logger.error(f"处理压缩sitemap失败: {e}")
-            # 提供更详细的调试信息
-            logger.error(f"Content-Encoding: {content_encoding}")
-            content_preview = content[:100]
-            decompressed_preview = decompressed_content[:100] if decompressed_content else b"None"
-            logger.error(f"原始内容预览: {content_preview}")
-            logger.error(f"解压内容预览: {decompressed_preview}")
+            # 提供调试信息但不输出敏感内容
+            logger.error(f"内容编码: {content_encoding}")
+            logger.error(f"原始内容长度: {len(content)} bytes")
+            if decompressed_content:
+                logger.error(f"解压内容长度: {len(decompressed_content)} bytes")
+            else:
+                logger.error("解压内容为空")
             return {}
 
     def _download_with_retry(self, url: str, headers: dict, max_retries: int = 3) -> requests.Response:
@@ -357,9 +367,10 @@ class SitemapParser:
                         if not SitemapParser._should_exclude_url(url_text):
                             sitemap_data[url_text] = None
             
-            logger.info(f"成功解析RSS feed: {url}")
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.info(f"成功解析RSS feed: {domain_part}")
             return sitemap_data
-            
+
         except Exception as e:
             logger.error(f"解析RSS feed失败: {e}")
             return {}
@@ -390,9 +401,10 @@ class SitemapParser:
                     if not SitemapParser._should_exclude_url(line):
                         sitemap_data[line] = None  # TXT格式通常没有lastmod信息
             
-            logger.info(f"成功解析TXT sitemap: {url}")
+            domain_part = urlparse(url).netloc if url else '***'
+            logger.info(f"成功解析TXT sitemap: {domain_part}")
             return sitemap_data
-            
+
         except Exception as e:
             logger.error(f"解析TXT sitemap失败: {e}")
             return {}
@@ -481,9 +493,8 @@ class SitemapParser:
                                 
                         except ET.ParseError as e:
                             logger.warning(f"XML解析失败: {e}")
-                            # 打印内容前500字符用于调试
-                            content_preview = response.content[:500]
-                            logger.debug(f"内容预览: {content_preview}")
+                            # 记录内容长度用于调试，但不输出敏感内容
+                            logger.debug(f"内容长度: {len(response.content)} bytes")
                             continue
                         
                         temp_session.close()
@@ -542,8 +553,9 @@ class SitemapParser:
                         base_url = '/'.join(original_url.split('/')[:-1])
                         full_url = base_url + '/' + link
                     
-                    logger.info(f"尝试解析找到的sitemap: {full_url}")
-                    
+                    domain_part = urlparse(full_url).netloc if full_url else '***'
+                    logger.info(f"尝试解析找到的sitemap: {domain_part}")
+
                     # 递归解析找到的sitemap
                     sub_data = self.download_and_parse_sitemap(full_url, "sub")
                     sitemap_data.update(sub_data)
@@ -602,13 +614,14 @@ class SitemapParser:
                 # 合并所有子sitemap的结果
                 combined_data = {}
                 for sub_url in sitemap_urls[:5]:  # 限制最多处理5个子sitemap
-                    logger.info(f"解析子sitemap: {sub_url}")
+                    domain_part = urlparse(sub_url).netloc if sub_url else '***'
+                    logger.info(f"解析子sitemap: {domain_part}")
                     try:
                         sub_data = self.download_and_parse_sitemap(sub_url, "sub")
                         combined_data.update(sub_data)
                         time.sleep(0.5)  # 避免请求过快
                     except Exception as e:
-                        logger.warning(f"解析子sitemap失败: {sub_url}, 错误: {e}")
+                        logger.warning(f"解析子sitemap失败: {domain_part}, 错误: {e}")
                         continue
                 
                 logger.info(f"sitemap index解析完成，总共获得 {len(combined_data)} 个URL")
