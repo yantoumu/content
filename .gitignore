@@ -1,0 +1,65 @@
+# 排除特定文件
+content_watcher.py
+
+# 排除测试文件
+test_*.py
+*.sh
+debug_*.py
+setup_github_secrets.sh
+setup_github_secrets.sh.template
+# 排除所有本地文件
+local_files/
+
+# 排除缓存和临时文件
+__pycache__/
+CONFIGURATION.md
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 排除IDE文件
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 排除日志和数据文件
+*.log
+data/
+debug_api.log
+output.log
+
+# 排除敏感信息
+.env
+setup_github_secrets.sh
+setup_github_secrets_simple.sh
+**/setup_github_secrets*.sh
+*.key
+*.pem
+
+# 排除文档文件（可能包含敏感信息）
+GitHub环境变量配置示例.md
+环境变量配置文档.md
+GITHUB_SECRETS_GUIDE.md
+*SECRETS*.md
+*secrets*.md
+*API_GUIDE*.md
+*api_guide*.md
+CONFIG_GUIDE.md
+SETUP_GUIDE.md

@@ -1,0 +1,59 @@
+name: Monitor Job
+
+on:
+  schedule:
+    # 每4小时运行一次
+    - cron: '0 */4 * * *'
+  workflow_dispatch:  # 允许手动触发，部署后可立即运行
+
+# 添加权限设置
+permissions:
+  contents: write  # 给予写入仓库内容的权限
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run content monitoring
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          KEYWORDS_API_URLS: ${{ secrets.KEYWORDS_API_URLS }}
+          KEYWORD_METRICS_API_URL: ${{ secrets.KEYWORD_METRICS_API_URL }}
+          SITEMAP_API_KEY: ${{ secrets.SITEMAP_API_KEY }}
+          WEBSITE_URLS: ${{ secrets.WEBSITE_URLS }}
+          DEBUG: ${{ secrets.DEBUG || 'false' }}
+          MAX_CONCURRENT: ${{ secrets.MAX_CONCURRENT || '3' }}
+          KEYWORDS_BATCH_SIZE: ${{ secrets.KEYWORDS_BATCH_SIZE || '4' }}
+          API_RETRY_MAX: ${{ secrets.API_RETRY_MAX || '3' }}
+          API_HEALTH_CHECK_INTERVAL: ${{ secrets.API_HEALTH_CHECK_INTERVAL || '30' }}
+          API_CIRCUIT_BREAKER_THRESHOLD: ${{ secrets.API_CIRCUIT_BREAKER_THRESHOLD || '5' }}
+          API_REQUEST_INTERVAL: ${{ secrets.API_REQUEST_INTERVAL || '1.0' }}
+          KEYWORD_QUERY_TIMEOUT: ${{ secrets.KEYWORD_QUERY_TIMEOUT || '60' }}
+          LOGLEVEL: ${{ secrets.LOGLEVEL || 'INFO' }}
+          SITE_REQUEST_TIMEOUT: ${{ secrets.SITE_REQUEST_TIMEOUT || '20' }}
+          METRICS_API_MAX_BATCH_SIZE: ${{ secrets.METRICS_API_MAX_BATCH_SIZE || '200' }}
+          ENABLE_PERFORMANCE_MODE: ${{ secrets.ENABLE_PERFORMANCE_MODE || 'true' }}
+        run: |
+          python main.py
+
+      - name: 提交更新数据
+        if: success()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add previous_data.json
+          git diff --staged --quiet || git commit -m "更新监控数据" -a
+          git push
