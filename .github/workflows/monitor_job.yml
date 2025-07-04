@@ -46,14 +46,10 @@ jobs:
           SITE_REQUEST_TIMEOUT: ${{ secrets.SITE_REQUEST_TIMEOUT || '20' }}
           METRICS_API_MAX_BATCH_SIZE: ${{ secrets.METRICS_API_MAX_BATCH_SIZE || '200' }}
           ENABLE_PERFORMANCE_MODE: ${{ secrets.ENABLE_PERFORMANCE_MODE || 'true' }}
-          PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "当前工作目录: $(pwd)"
-          echo "Python 路径: $PYTHONPATH"
-          echo "检查文件结构:"
-          ls -la
           echo "运行内容监控..."
-          python main.py
+          python run.py
 
       - name: 提交更新数据
         if: success()
