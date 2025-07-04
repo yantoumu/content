@@ -18,9 +18,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, Future
 import queue
 
-from .config_manager import get_config, get_int_config, get_bool_config, get_list_config
-from .error_handler import ErrorSeverity, get_error_manager, handle_errors, error_context
-from .resource_manager import managed_session
+from src.config_manager import get_config, get_int_config, get_bool_config, get_list_config
+from src.error_handler import ErrorSeverity, get_error_manager, handle_errors, error_context
+from src.resource_manager import managed_session
 
 logger = logging.getLogger(__name__)
 

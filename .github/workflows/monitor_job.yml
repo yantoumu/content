@@ -53,7 +53,7 @@ jobs:
           echo "检查文件结构:"
           ls -la
           echo "运行内容监控..."
-          python -m main
+          python main.py
 
       - name: 提交更新数据
         if: success()
