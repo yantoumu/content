@@ -48,8 +48,11 @@ jobs:
           ENABLE_PERFORMANCE_MODE: ${{ secrets.ENABLE_PERFORMANCE_MODE || 'true' }}
         run: |
           echo "当前工作目录: $(pwd)"
+          echo "设置 Python 路径..."
+          export PYTHONPATH="${PYTHONPATH}:${PWD}"
+          echo "PYTHONPATH=$PYTHONPATH"
           echo "运行内容监控..."
-          python run.py
+          python main.py
 
       - name: 提交更新数据
         if: success()

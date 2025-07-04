@@ -5,9 +5,23 @@
 启动网站内容监控程序
 """
 
+import sys
+import os
+from pathlib import Path
+
+# 必须在任何其他导入之前设置路径
+project_root = Path(__file__).parent.absolute()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# 调试信息
+print(f"项目根目录: {project_root}")
+print(f"当前工作目录: {os.getcwd()}")
+print(f"Python 路径前3项: {sys.path[:3]}")
+
+# 现在可以安全地导入其他模块
 import logging
 import argparse
-import os
 
 # 自动加载.env文件（如果存在）
 def load_env_file():
