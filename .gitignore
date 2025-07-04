@@ -1,5 +1,5 @@
 # 排除特定文件
-content_watcher.py
+# content_watcher.py - 已移除，该文件现在需要被跟踪
 
 # 排除测试文件
 test_*.py
