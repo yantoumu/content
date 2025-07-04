@@ -8,6 +8,10 @@
 import logging
 import argparse
 import os
+import sys
+
+# 添加项目根目录到Python路径
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 自动加载.env文件（如果存在）
 def load_env_file():
