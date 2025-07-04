@@ -9,9 +9,19 @@ import logging
 import argparse
 import os
 import sys
+from pathlib import Path
 
-# 添加项目根目录到Python路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 获取项目根目录的绝对路径
+project_root = Path(__file__).parent.absolute()
+# 确保项目根目录在 Python 路径中
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# 输出调试信息（帮助诊断路径问题）
+print(f"Python 可执行文件: {sys.executable}")
+print(f"当前工作目录: {os.getcwd()}")
+print(f"项目根目录: {project_root}")
+print(f"Python 路径: {sys.path[:3]}...")  # 只显示前3个路径
 
 # 自动加载.env文件（如果存在）
 def load_env_file():
